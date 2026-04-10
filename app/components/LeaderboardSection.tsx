@@ -19,7 +19,9 @@ export default function LeaderboardSection() {
       setLoading(true);
       const res = await getLeaderboard(20);
       if (res.success && res.data) {
-        setLeaderboard(res.data);
+        // Filter and typecast data to ensure correct structure
+        const typedData = res.data.filter(entry => entry && entry.users) as unknown as LeaderboardEntry[];
+        setLeaderboard(typedData);
       }
       setLoading(false);
     };

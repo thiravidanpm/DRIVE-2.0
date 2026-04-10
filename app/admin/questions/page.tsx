@@ -42,7 +42,7 @@ export default function AdminQuestionsPage() {
 
   const fetchCounts = async () => {
     const result = await getQuestionCountByLevel();
-    if (result.success) {
+    if (result.success && result.data) {
       setCounts(result.data);
     }
   };
