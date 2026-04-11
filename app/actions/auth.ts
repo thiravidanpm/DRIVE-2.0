@@ -1,7 +1,7 @@
 "use server";
 
 import { supabase } from "@/lib/supabase";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcryptjs"; 
 
 export async function registerUser(rollNumber: string) {
   try {
