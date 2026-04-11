@@ -49,21 +49,24 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow">
+      <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-gray-600 mt-1">Welcome, {rollNumber}</p>
+          <div className="flex items-center gap-4">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center font-bold text-white text-xs">D</div>
+            <div>
+              <h1 className="text-lg font-bold text-gray-900">Dashboard</h1>
+              <p className="text-xs text-gray-500">Welcome, {rollNumber}</p>
+            </div>
           </div>
-          <div className="flex gap-3 items-center">
+          <div className="flex gap-2 items-center">
             <Link href="/admin/superadmin">
-              <button className="px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+              <button className="px-3 py-2 text-xs bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition font-medium">
                 🎮 Admin
               </button>
             </Link>
             <button
               onClick={handleLogout}
-              className="px-6 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition"
+              className="px-4 py-2 text-xs bg-red-50 text-red-600 border border-red-200 rounded-lg font-semibold hover:bg-red-100 transition"
             >
               Logout
             </button>
@@ -72,45 +75,32 @@ export default function DashboardPage() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main className="max-w-7xl mx-auto px-6 py-6">
         {/* Tabs */}
-        <div className="mb-8">
-          <div className="flex gap-4 border-b border-gray-200 overflow-x-auto">
-            <button
-              onClick={() => setActiveTab("profile")}
-              className={`px-6 py-3 font-semibold transition border-b-2 whitespace-nowrap ${
-                activeTab === "profile"
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              Profile
-            </button>
-            <button
-              onClick={() => setActiveTab("test")}
-              className={`px-6 py-3 font-semibold transition border-b-2 whitespace-nowrap ${
-                activeTab === "test"
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              Assessments
-            </button>
-            <button
-              onClick={() => setActiveTab("leaderboard")}
-              className={`px-6 py-3 font-semibold transition border-b-2 whitespace-nowrap ${
-                activeTab === "leaderboard"
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              Leaderboard
-            </button>
+        <div className="mb-6">
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
+            {[
+              { key: "profile" as const, label: "📊 Profile", },
+              { key: "test" as const, label: "📝 Assessments", },
+              { key: "leaderboard" as const, label: "🏆 Leaderboard", },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === tab.key
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
 
         {/* Tab Content */}
-        <div className="space-y-8">
+        <div className="animate-fadeIn">
           {activeTab === "profile" && (
             <ProfileDashboard userId={userId} rollNumber={rollNumber} />
           )}

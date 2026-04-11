@@ -10,7 +10,7 @@ import {
 
 export default function AdminQuestionsPage() {
   const [questions, setQuestions] = useState<any[]>([]);
-  const [counts, setCounts] = useState({ level1: 0, level2: 0, level3: 0 });
+  const [counts, setCounts] = useState({ level1: 0, level2: 0 });
   const [selectedLevel, setSelectedLevel] = useState(1);
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -115,41 +115,44 @@ export default function AdminQuestionsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-6xl mx-auto px-6 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-900">Question Manager</h1>
-          <p className="text-gray-600 mt-2">
-            Manage questions for DRIVE 2.0 Assessment Platform
+          <h1 className="text-2xl font-bold text-gray-900">Question Manager</h1>
+          <p className="text-gray-500 text-sm mt-1">
+            Manage questions for DRIVE 2.0 assessments
           </p>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
-          <div className="bg-blue-50 border-l-4 border-blue-600 p-4">
-            <p className="text-gray-600 text-sm font-medium">Level 1 (Beginner)</p>
-            <p className="text-3xl font-bold text-blue-600">{counts.level1}</p>
+        <div className="grid grid-cols-2 gap-4 mb-8">
+          <div className="bg-white rounded-2xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-500 text-xs font-medium uppercase tracking-wider">Level 1 — Aptitude</p>
+                <p className="text-3xl font-bold text-blue-600 mt-1">{counts.level1}</p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center"><span className="text-xl">📝</span></div>
+            </div>
           </div>
-          <div className="bg-green-50 border-l-4 border-green-600 p-4">
-            <p className="text-gray-600 text-sm font-medium">
-              Level 2 (Intermediate)
-            </p>
-            <p className="text-3xl font-bold text-green-600">{counts.level2}</p>
+          <div className="bg-white rounded-2xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-gray-500 text-xs font-medium uppercase tracking-wider">Level 2 — Coding</p>
+                <p className="text-3xl font-bold text-green-600 mt-1">{counts.level2}</p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-green-50 flex items-center justify-center"><span className="text-xl">💻</span></div>
+            </div>
           </div>
-          <div className="bg-orange-50 border-l-4 border-orange-600 p-4">
-            <p className="text-gray-600 text-sm font-medium">
-              Level 3 (Advanced)
-            </p>
-            <p className="text-3xl font-bold text-orange-600">{counts.level3}</p>
-          </div>
+
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Add Question Form */}
           <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg border border-gray-200 p-6 sticky top-8">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">
+            <div className="bg-white rounded-2xl border border-gray-200 p-6 sticky top-8">
+              <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-5">
                 Add New Question
               </h2>
 
@@ -165,11 +168,8 @@ export default function AdminQuestionsPage() {
                     onChange={handleformDataChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value={1}>Level 1 - Beginner (Aptitude)</option>
-                    <option value={2}>
-                      Level 2 - Intermediate (Logical Reasoning)
-                    </option>
-                    <option value={3}>Level 3 - Advanced (Coding)</option>
+                    <option value={1}>Level 1 - Aptitude (MCQ)</option>
+                    <option value={2}>Level 2 - Coding (DSA)</option>
                   </select>
                 </div>
 
@@ -224,7 +224,7 @@ export default function AdminQuestionsPage() {
                     onChange={handleformDataChange}
                     placeholder="Enter question text..."
                     rows={4}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-500"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition text-sm text-gray-900 placeholder-gray-400 resize-none"
                   />
                 </div>
 
@@ -244,7 +244,7 @@ export default function AdminQuestionsPage() {
                       }
                       onChange={handleformDataChange}
                       placeholder={`Option ${letter}`}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition text-sm text-gray-900 placeholder-gray-400"
                     />
                   </div>
                 ))}
@@ -268,14 +268,16 @@ export default function AdminQuestionsPage() {
                 </div>
 
                 {submitMessage && (
-                  <div className="p-3 rounded-lg bg-gray-100 text-gray-700 text-sm">
+                  <div className={`p-3 rounded-xl text-sm font-medium ${
+                    submitMessage.startsWith("✅") ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"
+                  }`}>
                     {submitMessage}
                   </div>
                 )}
 
                 <button
                   type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition"
+                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-semibold py-2.5 rounded-xl transition text-sm shadow-lg shadow-blue-600/20"
                 >
                   Add Question
                 </button>
@@ -289,7 +291,7 @@ export default function AdminQuestionsPage() {
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold text-gray-900">Questions</h2>
                 <div className="flex gap-2">
-                  {[1, 2, 3].map((level) => (
+                  {[1, 2].map((level) => (
                     <button
                       key={level}
                       onClick={() => setSelectedLevel(level)}

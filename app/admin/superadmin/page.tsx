@@ -38,6 +38,9 @@ import {
   resetL2UsersForWeek,
   getL2CumulativeLeaderboard,
   importL2Problems,
+  getL2PulledWeeks,
+  pullL2Week,
+  unpullL2Week,
 } from "@/app/actions/l2";
 import { formatQuestionForDownload } from "@/lib/webhookParser";
 
@@ -74,6 +77,7 @@ export default function SuperAdminPage() {
   const [l2Message, setL2Message] = useState("");
   const [l2SelectedResetUsers, setL2SelectedResetUsers] = useState<Set<number>>(new Set());
   const [l2ImportText, setL2ImportText] = useState("");
+  const [l2PulledWeeks, setL2PulledWeeks] = useState<number[]>([]);
 
   // Konami code activation
   useKonamiCode(() => {
@@ -136,6 +140,8 @@ export default function SuperAdminPage() {
       }
       const l2Cum = await getL2CumulativeLeaderboard();
       if (l2Cum.success && l2Cum.data) setL2CumLeaderboard(l2Cum.data);
+      const pulledRes = await getL2PulledWeeks();
+      if (pulledRes.success) setL2PulledWeeks(pulledRes.pulledWeeks);
     }
 
     setLoading(false);
@@ -385,14 +391,17 @@ export default function SuperAdminPage() {
 
   if (!isUnlocked) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-4">
         <div className="text-center">
-          <h1 className="text-4xl font-bold text-white mb-4">🔒 Access Restricted</h1>
-          <p className="text-gray-400 text-lg mb-8">
+          <div className="w-20 h-20 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto mb-6">
+            <span className="text-4xl">🔒</span>
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Access Restricted</h1>
+          <p className="text-gray-500 text-sm mb-8">
             This area requires special authentication.
           </p>
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 max-w-md mx-auto">
-            <p className="text-gray-300">Authorized personnel only.</p>
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 max-w-sm mx-auto">
+            <p className="text-gray-400 text-sm">Authorized personnel only.</p>
           </div>
         </div>
       </div>
@@ -402,22 +411,22 @@ export default function SuperAdminPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-gray-900 text-white p-6 shadow-lg">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white p-6">
         <div className="max-w-7xl mx-auto">
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex justify-between items-center mb-5">
             <div>
-              <h1 className="text-3xl font-bold">🎮 Super Admin Dashboard</h1>
-              <p className="text-gray-400 mt-1">Full Control Panel • All Privileges</p>
+              <h1 className="text-xl font-bold flex items-center gap-2">🎮 Super Admin</h1>
+              <p className="text-gray-400 text-xs mt-1">Full Control Panel</p>
             </div>
             <Link href="/dashboard">
-              <button className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">
-                Back to Dashboard
+              <button className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-xl text-sm transition border border-white/10">
+                ← Dashboard
               </button>
             </Link>
           </div>
 
           {/* Tab Navigation */}
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-1.5 flex-wrap">
             {["dashboard", "users", "questions", "weekly", "l2"].map((tab) => (
               <button
                 key={tab}
@@ -425,17 +434,17 @@ export default function SuperAdminPage() {
                   setActiveTab(tab as any);
                   setSelectedUser(null);
                 }}
-                className={`px-6 py-2 rounded-lg font-semibold transition ${
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
                   activeTab === tab
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "bg-white/10 text-gray-300 hover:bg-white/15"
                 }`}
               >
-                {tab === "dashboard" && "📊 Dashboard"}
+                {tab === "dashboard" && "📊 Overview"}
                 {tab === "users" && "👥 Users"}
                 {tab === "questions" && "❓ Questions"}
-                {tab === "weekly" && `📅 Week ${currentWeek}`}
-                {tab === "l2" && `💻 L2 Coding (W${l2Week})`}
+                {tab === "weekly" && `📅 L1 Week ${currentWeek}`}
+                {tab === "l2" && `💻 L2 Week ${l2Week}`}
               </button>
             ))}
           </div>
@@ -510,7 +519,7 @@ export default function SuperAdminPage() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyPress={(e) => e.key === "Enter" && handleSearch()}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-500"
+                  className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition text-sm text-gray-900 placeholder-gray-400"
                 />
                 <button
                   onClick={handleSearch}
@@ -724,7 +733,7 @@ export default function SuperAdminPage() {
 
             {/* Filter and Actions */}
             <div className="flex gap-2 mb-6">
-                {[1, 2, 3].map((level) => (
+                {[1, 2].map((level) => (
                   <button
                     key={level}
                     onClick={() => {
@@ -1100,6 +1109,61 @@ export default function SuperAdminPage() {
               )}
             </div>
 
+            {/* Pull Older Weeks */}
+            <div className="bg-white rounded-lg border-2 border-purple-200 p-6">
+              <h3 className="text-lg font-bold text-gray-900 mb-2">🔄 Pull Older Weeks</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                Pull older week questions so students can attempt them alongside current week. Only weeks before Week {l2Week} can be pulled.
+              </p>
+              {l2PulledWeeks.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-sm font-medium text-gray-700 mb-2">Currently Pulled:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {l2PulledWeeks.map((w) => (
+                      <span key={w} className="inline-flex items-center gap-2 px-3 py-1.5 bg-purple-100 border border-purple-300 rounded-lg text-sm text-purple-800 font-semibold">
+                        Week {w}
+                        <button
+                          onClick={async () => {
+                            const res = await unpullL2Week(w);
+                            setL2Message(res.success ? `✅ ${res.message}` : `❌ ${res.message}`);
+                            const pulledRes = await getL2PulledWeeks();
+                            if (pulledRes.success) setL2PulledWeeks(pulledRes.pulledWeeks);
+                          }}
+                          className="text-purple-600 hover:text-red-600 font-bold"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {Array.from({ length: Math.max(0, l2Week - 1) }, (_, i) => i + 1)
+                  .filter((w) => !l2PulledWeeks.includes(w))
+                  .map((w) => (
+                    <button
+                      key={w}
+                      onClick={async () => {
+                        setLoading(true);
+                        const res = await pullL2Week(w);
+                        setL2Message(res.success ? `✅ ${res.message}` : `❌ ${res.message}`);
+                        const pulledRes = await getL2PulledWeeks();
+                        if (pulledRes.success) setL2PulledWeeks(pulledRes.pulledWeeks);
+                        setLoading(false);
+                      }}
+                      disabled={loading}
+                      className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition text-sm font-semibold"
+                    >
+                      Pull Week {w}
+                    </button>
+                  ))}
+                {l2Week <= 1 && (
+                  <p className="text-gray-400 text-sm italic">No older weeks available to pull yet (currently on Week 1).</p>
+                )}
+              </div>
+            </div>
+
             {/* Completed L2 Users with reset */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
               <div className="flex justify-between items-center mb-4">
@@ -1186,7 +1250,7 @@ export default function SuperAdminPage() {
                 onChange={(e) => setL2ImportText(e.target.value)}
                 placeholder={`[{\n  "title": "Two Sum",\n  "description": "Given an array...",\n  "category": "Arrays",\n  "difficulty": "Easy",\n  "test_cases": [{"input": "4\\n2 7 11 15\\n9", "expected_output": "0 1"}],\n  "starter_code": {"python": "def solve():\\n    pass", "java": "...", "c": "..."}\n}]`}
                 rows={8}
-                className="w-full p-3 border border-gray-300 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition text-gray-900 placeholder-gray-400"
               />
               <button
                 onClick={handleImportL2Problems}

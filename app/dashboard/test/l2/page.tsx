@@ -5,9 +5,8 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
   getL2CurrentWeek,
-  getL2WeekProblems,
-  hasUserCompletedL2Week,
-  getUserL2Submissions,
+  getStudentAvailableProblems,
+  getUserAttemptedProblems,
   getUserL2History,
   submitL2Solution,
 } from "@/app/actions/l2";
@@ -15,12 +14,15 @@ import { quickRunCode } from "@/lib/pistonService";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
+const TIMER_SECONDS = 10 * 60; // 10 minutes
+
 interface Problem {
   id: number;
   title: string;
   description: string;
   category: string;
   difficulty: string;
+  week_number: number;
   test_cases: { input: string; expected_output: string }[];
   starter_code: { python?: string; java?: string; c?: string };
 }
@@ -41,21 +43,24 @@ interface HistoryEntry {
   completed_at: string;
 }
 
-type PageMode = "loading" | "completed" | "no-problems" | "menu" | "coding";
+interface AttemptInfo {
+  status: string;
+  score: number;
+  ai_score?: number;
+}
+
+type PageMode = "loading" | "no-problems" | "menu" | "coding";
 
 export default function L2TestPage() {
   const [userId, setUserId] = useState<number | null>(null);
   const [currentWeek, setCurrentWeek] = useState(1);
-  const [problems, setProblems] = useState<Problem[]>([]);
-  const [solvedProblemIds, setSolvedProblemIds] = useState<Set<number>>(new Set());
+  const [currentWeekProblems, setCurrentWeekProblems] = useState<Problem[]>([]);
+  const [pulledWeekProblems, setPulledWeekProblems] = useState<{ week: number; problems: Problem[] }[]>([]);
+  const [attemptedMap, setAttemptedMap] = useState<Record<number, AttemptInfo>>({});
   const [selectedProblem, setSelectedProblem] = useState<Problem | null>(null);
+  const [selectedProblemWeek, setSelectedProblemWeek] = useState(0);
   const [weeklyHistory, setWeeklyHistory] = useState<HistoryEntry[]>([]);
   const [totalScore, setTotalScore] = useState(0);
-  const [completionResult, setCompletionResult] = useState<{
-    problems_solved: number;
-    total_problems: number;
-    score: number;
-  } | null>(null);
   const [mode, setMode] = useState<PageMode>("loading");
 
   const [code, setCode] = useState("");
@@ -68,11 +73,23 @@ export default function L2TestPage() {
   const [activePanel, setActivePanel] = useState<"description" | "testcases" | "output">(
     "description"
   );
+  const [submissionResult, setSubmissionResult] = useState<{
+    score: number;
+    aiScore?: number;
+    aiFeedback?: string;
+    allPassed: boolean;
+  } | null>(null);
 
+  // Timer
+  const [timeLeft, setTimeLeft] = useState(TIMER_SECONDS);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoSubmitRef = useRef(false);
+  const hasSubmittedRef = useRef(false);
+
+  // Violations
   const [violations, setViolations] = useState(0);
   const [showViolationWarning, setShowViolationWarning] = useState(false);
   const [violationMessage, setViolationMessage] = useState("");
-  const autoSubmitRef = useRef(false);
   const MAX_VIOLATIONS = 3;
 
   useEffect(() => {
@@ -92,39 +109,96 @@ export default function L2TestPage() {
     const week = weekRes.week;
     setCurrentWeek(week);
 
-    const completionRes = await hasUserCompletedL2Week(uid, week);
-    const probRes = await getL2WeekProblems(week);
+    const [probRes, attRes, histRes] = await Promise.all([
+      getStudentAvailableProblems(week),
+      getUserAttemptedProblems(uid),
+      getUserL2History(uid),
+    ]);
 
-    if (probRes.success && probRes.data && probRes.data.length > 0) {
-      setProblems(probRes.data);
+    if (probRes.success) {
+      setCurrentWeekProblems(probRes.currentWeekProblems);
+      setPulledWeekProblems(probRes.pulledWeekProblems);
     }
 
-    const subsRes = await getUserL2Submissions(uid, week);
-    if (subsRes.success && subsRes.data) {
-      setSolvedProblemIds(new Set(subsRes.data.map((s: any) => s.problem_id)));
+    if (attRes.success) {
+      setAttemptedMap(attRes.attemptedMap);
     }
 
-    const histRes = await getUserL2History(uid);
     if (histRes.success && histRes.data) {
       setWeeklyHistory(histRes.data);
       setTotalScore(histRes.totalScore || 0);
     }
 
-    if (
-      completionRes.completed &&
-      completionRes.result &&
-      completionRes.result.problems_solved >= completionRes.result.total_problems
-    ) {
-      setCompletionResult(completionRes.result);
-      setMode("completed");
+    const hasProblems =
+      (probRes.currentWeekProblems?.length || 0) > 0 ||
+      (probRes.pulledWeekProblems?.length || 0) > 0;
+
+    setMode(hasProblems ? "menu" : "no-problems");
+  };
+
+  // Timer countdown
+  useEffect(() => {
+    if (mode !== "coding") {
+      if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
 
-    if (!probRes.success || !probRes.data || probRes.data.length === 0) {
-      setMode("no-problems");
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          // Time's up - auto submit
+          if (!hasSubmittedRef.current) {
+            hasSubmittedRef.current = true;
+            autoSubmitRef.current = true;
+            handleAutoSubmit();
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [mode]);
+
+  const handleAutoSubmit = async () => {
+    if (!userId || !selectedProblem) return;
+    setIsSubmitting(true);
+    setActivePanel("output");
+    setRunOutput("⏰ Time expired! Auto-submitting your code...");
+
+    const result = await submitL2Solution(
+      userId,
+      selectedProblem.id,
+      selectedProblemWeek,
+      code,
+      language,
+      true
+    );
+
+    if (result.success) {
+      setTestResults(result.results || []);
+      setRunOutput(result.message || "");
+      setSubmissionResult({
+        score: result.score || 0,
+        aiScore: result.aiScore,
+        aiFeedback: result.aiFeedback,
+        allPassed: result.allPassed || false,
+      });
+      setAttemptedMap((prev) => ({
+        ...prev,
+        [selectedProblem.id]: {
+          status: result.allPassed ? "passed" : "failed",
+          score: result.score || 0,
+          ai_score: result.aiScore,
+        },
+      }));
     } else {
-      setMode("menu");
+      setRunOutput(`Error: ${result.message}`);
     }
+    setIsSubmitting(false);
   };
 
   const enterFullscreen = useCallback(async () => {
@@ -157,10 +231,16 @@ export default function L2TestPage() {
           const n = prev + 1;
           if (n >= MAX_VIOLATIONS) {
             setViolationMessage(
-              `Violation ${n}/${MAX_VIOLATIONS}: Maximum violations! Returning to problem list.`
+              `Violation ${n}/${MAX_VIOLATIONS}: Maximum violations! Auto-submitting.`
             );
             setShowViolationWarning(true);
-            setTimeout(() => triggerAutoSubmit(), 2000);
+            setTimeout(() => {
+              if (!hasSubmittedRef.current) {
+                hasSubmittedRef.current = true;
+                handleAutoSubmit();
+              }
+              setTimeout(() => triggerAutoSubmit(), 3000);
+            }, 2000);
           } else {
             setViolationMessage(
               `Violation ${n}/${MAX_VIOLATIONS}: Tab switch detected! ${MAX_VIOLATIONS - n} remaining.`
@@ -177,10 +257,16 @@ export default function L2TestPage() {
           const n = prev + 1;
           if (n >= MAX_VIOLATIONS) {
             setViolationMessage(
-              `Violation ${n}/${MAX_VIOLATIONS}: Maximum violations! Returning to problem list.`
+              `Violation ${n}/${MAX_VIOLATIONS}: Maximum violations! Auto-submitting.`
             );
             setShowViolationWarning(true);
-            setTimeout(() => triggerAutoSubmit(), 2000);
+            setTimeout(() => {
+              if (!hasSubmittedRef.current) {
+                hasSubmittedRef.current = true;
+                handleAutoSubmit();
+              }
+              setTimeout(() => triggerAutoSubmit(), 3000);
+            }, 2000);
           } else {
             setViolationMessage(
               `Violation ${n}/${MAX_VIOLATIONS}: Fullscreen exited! ${MAX_VIOLATIONS - n} remaining.`
@@ -199,16 +285,24 @@ export default function L2TestPage() {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
   }, [mode, triggerAutoSubmit, enterFullscreen]);
+  }, [mode, triggerAutoSubmit, enterFullscreen]);
 
-  const openProblem = (problem: Problem) => {
+  const openProblem = (problem: Problem, weekNum: number) => {
+    // Check if already attempted
+    if (attemptedMap[problem.id]) return;
+
     setSelectedProblem(problem);
+    setSelectedProblemWeek(weekNum);
     setCode(problem.starter_code?.[language] || "");
     setRunOutput("");
     setTestResults([]);
+    setSubmissionResult(null);
     setActivePanel("description");
     setViolations(0);
     setShowViolationWarning(false);
     autoSubmitRef.current = false;
+    hasSubmittedRef.current = false;
+    setTimeLeft(TIMER_SECONDS);
     enterFullscreen();
     setMode("coding");
   };
@@ -230,32 +324,46 @@ export default function L2TestPage() {
   };
 
   const handleSubmit = async () => {
-    if (!userId || !selectedProblem) return;
+    if (!userId || !selectedProblem || hasSubmittedRef.current) return;
+    hasSubmittedRef.current = true;
     setIsSubmitting(true);
     setActivePanel("output");
-    setRunOutput("Submitting & running test cases...");
-    const result = await submitL2Solution(userId, selectedProblem.id, currentWeek, code, language);
+    setRunOutput("Submitting & running test cases... (AI scoring if tests fail)");
+
+    const result = await submitL2Solution(
+      userId,
+      selectedProblem.id,
+      selectedProblemWeek,
+      code,
+      language,
+      false
+    );
+
     if (result.success) {
       setTestResults(result.results || []);
       setRunOutput(result.message || "");
-      if (result.allPassed) {
-        setSolvedProblemIds((prev) => new Set([...prev, selectedProblem.id]));
-        const newSolvedCount =
-          solvedProblemIds.size + (solvedProblemIds.has(selectedProblem.id) ? 0 : 1);
-        if (newSolvedCount >= problems.length) {
-          setTimeout(() => {
-            exitFullscreen();
-            setCompletionResult({
-              problems_solved: problems.length,
-              total_problems: problems.length,
-              score: problems.length,
-            });
-            setMode("completed");
-          }, 2000);
-        }
-      }
+      setSubmissionResult({
+        score: result.score || 0,
+        aiScore: result.aiScore,
+        aiFeedback: result.aiFeedback,
+        allPassed: result.allPassed || false,
+      });
+      setAttemptedMap((prev) => ({
+        ...prev,
+        [selectedProblem.id]: {
+          status: result.allPassed ? "passed" : "failed",
+          score: result.score || 0,
+          ai_score: result.aiScore,
+        },
+      }));
+      // Stop timer
+      if (timerRef.current) clearInterval(timerRef.current);
     } else {
       setRunOutput(`Error: ${result.message}`);
+      // Allow re-submit if it was a transient error (not "already attempted")
+      if (!result.message?.includes("already attempted")) {
+        hasSubmittedRef.current = false;
+      }
     }
     setIsSubmitting(false);
   };
@@ -265,7 +373,15 @@ export default function L2TestPage() {
     setSelectedProblem(null);
     setTestResults([]);
     setRunOutput("");
+    setSubmissionResult(null);
+    if (timerRef.current) clearInterval(timerRef.current);
     setMode("menu");
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
   const monacoLangMap: Record<string, string> = { python: "python", java: "java", c: "c" };
@@ -300,69 +416,17 @@ export default function L2TestPage() {
     );
   }
 
-  if (mode === "completed") {
-    return (
-      <div className="min-h-screen bg-gray-900">
-        <header className="bg-gray-800 border-b border-gray-700 p-4">
-          <div className="max-w-5xl mx-auto flex justify-between items-center">
-            <div>
-              <h1 className="text-2xl font-bold text-white">L2 Coding - Week {currentWeek}</h1>
-              <p className="text-gray-400 text-sm">DSA Problem Solving</p>
-            </div>
-            <Link href="/dashboard">
-              <button className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition">
-                Dashboard
-              </button>
-            </Link>
-          </div>
-        </header>
-        <div className="max-w-3xl mx-auto px-4 py-10">
-          <div className="bg-gray-800 border border-green-500/30 rounded-xl p-10 text-center mb-8">
-            <p className="text-6xl mb-4">🎉</p>
-            <h2 className="text-3xl font-bold text-green-400 mb-3">Week {currentWeek} Complete!</h2>
-            <p className="text-gray-400 mb-6">All coding problems solved. Come back next week!</p>
-            {completionResult && (
-              <div className="inline-block bg-gray-900 rounded-xl p-6 mb-6">
-                <p className="text-5xl font-black text-green-400">
-                  {completionResult.problems_solved}/{completionResult.total_problems}
-                </p>
-                <p className="text-gray-500 text-sm mt-2">Problems Solved</p>
-              </div>
-            )}
-          </div>
-          {weeklyHistory.length > 0 && (
-            <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-              <h3 className="text-lg font-bold text-white mb-4">Weekly History</h3>
-              <div className="space-y-3">
-                {weeklyHistory.map((entry, idx) => (
-                  <div
-                    key={idx}
-                    className="flex justify-between items-center bg-gray-900 rounded-lg p-4 border border-gray-700"
-                  >
-                    <div>
-                      <p className="font-semibold text-white">Week {entry.week_number}</p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(entry.completed_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <p className="text-xl font-bold text-green-400">
-                      {entry.problems_solved}/{entry.total_problems}
-                    </p>
-                  </div>
-                ))}
-                <div className="flex justify-between items-center bg-green-900/30 rounded-lg p-4 border border-green-700 font-bold">
-                  <p className="text-green-400">Total Score</p>
-                  <p className="text-2xl text-green-400">{totalScore}</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   if (mode === "menu") {
+    const allProblems = [
+      ...currentWeekProblems.map((p) => ({ ...p, fromWeek: currentWeek, isCurrent: true })),
+      ...pulledWeekProblems.flatMap((pw) =>
+        pw.problems.map((p) => ({ ...p, fromWeek: pw.week, isCurrent: false }))
+      ),
+    ];
+    const attemptedCount = allProblems.filter((p) => attemptedMap[p.id]).length;
+    const totalMarks = allProblems.reduce((sum, p) => sum + (attemptedMap[p.id]?.score || 0), 0);
+    const maxPossible = allProblems.length * 20;
+
     return (
       <div className="min-h-screen bg-gray-900">
         <header className="bg-gray-800 border-b border-gray-700 p-4">
@@ -370,7 +434,7 @@ export default function L2TestPage() {
             <div>
               <h1 className="text-2xl font-bold text-white">L2 Coding - Week {currentWeek}</h1>
               <p className="text-gray-400 text-sm">
-                {solvedProblemIds.size}/{problems.length} solved
+                {attemptedCount}/{allProblems.length} attempted • {totalMarks}/{maxPossible} marks
               </p>
             </div>
             <Link href="/dashboard">
@@ -383,71 +447,79 @@ export default function L2TestPage() {
         <div className="max-w-5xl mx-auto px-4 py-6">
           <div className="bg-amber-900/30 border border-amber-700 rounded-lg p-4 mb-6">
             <p className="text-amber-300 text-sm">
-              <strong>⚠️ Rules:</strong> Fullscreen mode enforced. Tab switch / exit fullscreen =
-              violation. 3 violations = kicked out of the problem.
+              <strong>⚠️ Rules:</strong> 10-minute timer per problem. One attempt only — no retries.
+              Fullscreen enforced. 3 violations = auto-submit. Score: Pass all tests = 20 marks, Fail = AI scores 0-15.
             </p>
           </div>
-          <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 mb-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-white">This Week&apos;s Problems</h2>
-              <div className="flex items-center gap-2">
-                <div className="w-32 bg-gray-700 rounded-full h-3">
-                  <div
-                    className="bg-green-500 h-3 rounded-full transition-all"
-                    style={{
-                      width: `${(solvedProblemIds.size / Math.max(problems.length, 1)) * 100}%`,
-                    }}
-                  ></div>
-                </div>
-                <span className="text-green-400 font-bold text-sm">
-                  {solvedProblemIds.size}/{problems.length}
-                </span>
-              </div>
+
+          {/* Score summary */}
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 text-center">
+              <p className="text-3xl font-black text-green-400">{totalMarks}</p>
+              <p className="text-xs text-gray-500 mt-1">Total Marks</p>
+            </div>
+            <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 text-center">
+              <p className="text-3xl font-black text-blue-400">{attemptedCount}/{allProblems.length}</p>
+              <p className="text-xs text-gray-500 mt-1">Attempted</p>
+            </div>
+            <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 text-center">
+              <p className="text-3xl font-black text-purple-400">{allProblems.filter((p) => attemptedMap[p.id]?.status === "passed").length}</p>
+              <p className="text-xs text-gray-500 mt-1">Passed</p>
             </div>
           </div>
-          <div className="space-y-3">
-            {problems.map((problem, idx) => {
-              const isSolved = solvedProblemIds.has(problem.id);
-              return (
-                <div
-                  key={problem.id}
-                  className={`bg-gray-800 rounded-xl border p-5 cursor-pointer transition hover:border-green-500/50 ${isSolved ? "border-green-600/40" : "border-gray-700"}`}
-                  onClick={() => openProblem(problem)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <span
-                        className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${isSolved ? "bg-green-600 text-white" : "bg-gray-700 text-gray-300"}`}
-                      >
-                        {isSolved ? "✓" : idx + 1}
-                      </span>
-                      <div>
-                        <h3 className="text-lg font-semibold text-white">{problem.title}</h3>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
-                            {problem.category}
-                          </span>
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded font-semibold ${problem.difficulty === "Easy" ? "bg-green-900 text-green-300" : problem.difficulty === "Medium" ? "bg-yellow-900 text-yellow-300" : "bg-red-900 text-red-300"}`}
-                          >
-                            {problem.difficulty}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <span
-                      className={`px-4 py-2 rounded-lg font-bold text-sm ${isSolved ? "bg-green-900/50 text-green-400 border border-green-700" : "bg-blue-900/50 text-blue-400 border border-blue-700"}`}
-                    >
-                      {isSolved ? "Solved ✓" : "Solve →"}
-                    </span>
-                  </div>
+
+          {/* Current Week Problems */}
+          {currentWeekProblems.length > 0 && (
+            <div className="mb-8">
+              <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 mb-3">
+                <h2 className="text-lg font-bold text-white">Week {currentWeek} Problems</h2>
+              </div>
+              <div className="space-y-3">
+                {currentWeekProblems.map((problem, idx) => {
+                  const attempt = attemptedMap[problem.id];
+                  return (
+                    <ProblemCard
+                      key={problem.id}
+                      problem={problem}
+                      index={idx}
+                      attempt={attempt}
+                      onClick={() => openProblem(problem, currentWeek)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Pulled Week Problems */}
+          {pulledWeekProblems.map((pw) => (
+            <div key={pw.week} className="mb-8">
+              <div className="bg-gray-800 rounded-xl border border-purple-700/40 p-4 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2 py-0.5 rounded bg-purple-900 text-purple-300 font-semibold">PULLED</span>
+                  <h2 className="text-lg font-bold text-white">Week {pw.week} Problems</h2>
                 </div>
-              );
-            })}
-          </div>
+              </div>
+              <div className="space-y-3">
+                {pw.problems.map((problem, idx) => {
+                  const attempt = attemptedMap[problem.id];
+                  return (
+                    <ProblemCard
+                      key={problem.id}
+                      problem={problem}
+                      index={idx}
+                      attempt={attempt}
+                      onClick={() => openProblem(problem, pw.week)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
           {weeklyHistory.length > 0 && (
             <div className="mt-8 bg-gray-800 rounded-xl border border-gray-700 p-6">
-              <h3 className="text-lg font-bold text-white mb-4">📈 Weekly History</h3>
+              <h3 className="text-lg font-bold text-white mb-4">Weekly History</h3>
               <div className="space-y-2">
                 {weeklyHistory.map((entry, idx) => (
                   <div
@@ -455,13 +527,16 @@ export default function L2TestPage() {
                     className="flex justify-between items-center bg-gray-900 rounded-lg p-3 border border-gray-700"
                   >
                     <span className="text-gray-300">Week {entry.week_number}</span>
-                    <span className="text-green-400 font-bold">
-                      {entry.problems_solved}/{entry.total_problems}
-                    </span>
+                    <div className="flex items-center gap-4">
+                      <span className="text-gray-400 text-sm">
+                        {entry.problems_solved}/{entry.total_problems} solved
+                      </span>
+                      <span className="text-green-400 font-bold">{entry.score} pts</span>
+                    </div>
                   </div>
                 ))}
                 <div className="flex justify-between items-center bg-green-900/20 rounded-lg p-3 border border-green-800 font-bold">
-                  <span className="text-green-300">Total</span>
+                  <span className="text-green-300">Total Score</span>
                   <span className="text-green-400 text-lg">{totalScore}</span>
                 </div>
               </div>
@@ -473,6 +548,8 @@ export default function L2TestPage() {
   }
 
   if (mode === "coding" && selectedProblem) {
+    const timerColor = timeLeft <= 60 ? "text-red-400" : timeLeft <= 180 ? "text-yellow-400" : "text-green-400";
+
     return (
       <div className="h-screen bg-gray-900 flex flex-col overflow-hidden relative">
         {showViolationWarning && (
@@ -498,9 +575,42 @@ export default function L2TestPage() {
                 </button>
               ) : (
                 <p className="text-red-400 font-bold animate-pulse">
-                  Returning to problem list...
+                  Auto-submitting & returning to problem list...
                 </p>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Submission Result Modal */}
+        {submissionResult && (
+          <div className="fixed inset-0 bg-black/80 z-40 flex items-center justify-center p-4">
+            <div className={`bg-gray-800 rounded-xl border ${submissionResult.allPassed ? "border-green-500" : "border-yellow-500"} p-8 max-w-md w-full text-center`}>
+              <p className="text-5xl mb-4">{submissionResult.allPassed ? "🎉" : "📝"}</p>
+              <h2 className={`text-2xl font-bold mb-3 ${submissionResult.allPassed ? "text-green-400" : "text-yellow-400"}`}>
+                {submissionResult.allPassed ? "All Tests Passed!" : "Submission Scored"}
+              </h2>
+              <div className="bg-gray-900 rounded-xl p-6 mb-4">
+                <p className={`text-5xl font-black ${submissionResult.allPassed ? "text-green-400" : "text-yellow-400"}`}>
+                  {submissionResult.score}/20
+                </p>
+                <p className="text-gray-500 text-sm mt-2">
+                  {submissionResult.allPassed
+                    ? "Full marks — all test cases passed"
+                    : `AI Score: ${submissionResult.aiScore ?? 0}/15`}
+                </p>
+              </div>
+              {submissionResult.aiFeedback && (
+                <p className="text-gray-400 text-sm mb-4 italic">
+                  &quot;{submissionResult.aiFeedback}&quot;
+                </p>
+              )}
+              <button
+                onClick={goBackToMenu}
+                className="px-8 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 transition"
+              >
+                Back to Problems
+              </button>
             </div>
           </div>
         )}
@@ -521,8 +631,18 @@ export default function L2TestPage() {
             >
               {selectedProblem.difficulty}
             </span>
+            <span className="text-xs px-2 py-0.5 rounded bg-blue-900 text-blue-300 font-semibold">
+              20 marks
+            </span>
           </div>
           <div className="flex items-center gap-3">
+            {/* Timer */}
+            <div className={`flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-900 border ${timeLeft <= 60 ? "border-red-500 animate-pulse" : "border-gray-600"}`}>
+              <span className="text-xs text-gray-400">⏱</span>
+              <span className={`font-mono font-bold text-sm ${timerColor}`}>
+                {formatTime(timeLeft)}
+              </span>
+            </div>
             <select
               value={language}
               onChange={(e) => handleLanguageChange(e.target.value as "python" | "java" | "c")}
@@ -542,17 +662,17 @@ export default function L2TestPage() {
             </div>
             <button
               onClick={handleRun}
-              disabled={isRunning || isSubmitting}
+              disabled={isRunning || isSubmitting || hasSubmittedRef.current}
               className="px-4 py-1.5 bg-gray-700 text-white text-sm rounded hover:bg-gray-600 disabled:opacity-50 transition border border-gray-600"
             >
               {isRunning ? "Running..." : "▶ Run"}
             </button>
             <button
               onClick={handleSubmit}
-              disabled={isRunning || isSubmitting}
+              disabled={isRunning || isSubmitting || hasSubmittedRef.current}
               className="px-4 py-1.5 bg-green-600 text-white text-sm font-bold rounded hover:bg-green-700 disabled:opacity-50 transition"
             >
-              {isSubmitting ? "Judging..." : "Submit"}
+              {isSubmitting ? "Judging..." : hasSubmittedRef.current ? "Submitted" : "Submit"}
             </button>
           </div>
         </div>
@@ -730,4 +850,88 @@ export default function L2TestPage() {
   }
 
   return null;
+}
+
+// Problem card sub-component
+function ProblemCard({
+  problem,
+  index,
+  attempt,
+  onClick,
+}: {
+  problem: Problem;
+  index: number;
+  attempt?: AttemptInfo;
+  onClick: () => void;
+}) {
+  const isAttempted = !!attempt;
+  const isPassed = attempt?.status === "passed";
+
+  return (
+    <div
+      className={`bg-gray-800 rounded-xl border p-5 transition ${
+        isAttempted
+          ? isPassed
+            ? "border-green-600/40 cursor-default"
+            : "border-yellow-600/40 cursor-default"
+          : "border-gray-700 cursor-pointer hover:border-green-500/50"
+      }`}
+      onClick={isAttempted ? undefined : onClick}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <span
+            className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${
+              isPassed
+                ? "bg-green-600 text-white"
+                : isAttempted
+                  ? "bg-yellow-600 text-white"
+                  : "bg-gray-700 text-gray-300"
+            }`}
+          >
+            {isPassed ? "✓" : isAttempted ? "!" : index + 1}
+          </span>
+          <div>
+            <h3 className="text-lg font-semibold text-white">{problem.title}</h3>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
+                {problem.category}
+              </span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                  problem.difficulty === "Easy"
+                    ? "bg-green-900 text-green-300"
+                    : problem.difficulty === "Medium"
+                      ? "bg-yellow-900 text-yellow-300"
+                      : "bg-red-900 text-red-300"
+                }`}
+              >
+                {problem.difficulty}
+              </span>
+              {isAttempted && (
+                <span className="text-xs px-2 py-0.5 rounded bg-gray-600 text-gray-200 font-semibold">
+                  {attempt.score}/20 pts
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <span
+          className={`px-4 py-2 rounded-lg font-bold text-sm ${
+            isPassed
+              ? "bg-green-900/50 text-green-400 border border-green-700"
+              : isAttempted
+                ? "bg-yellow-900/50 text-yellow-400 border border-yellow-700"
+                : "bg-blue-900/50 text-blue-400 border border-blue-700"
+          }`}
+        >
+          {isPassed
+            ? `Passed ✓ (${attempt.score}/20)`
+            : isAttempted
+              ? `Scored ${attempt.score}/20`
+              : "Solve →"}
+        </span>
+      </div>
+    </div>
+  );
 }

@@ -82,16 +82,16 @@ export default function LeaderboardSection() {
   const weekOptions = Array.from({ length: currentWeek }, (_, i) => i + 1);
 
   return (
-    <div className="bg-white rounded-lg shadow p-8">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">🏆 Leaderboard</h2>
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+      <div className="px-6 py-5 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <h2 className="text-lg font-bold text-gray-900">🏆 Leaderboard</h2>
+        <div className="flex items-center gap-1.5 flex-wrap">
           <button
             onClick={() => handleFilter("total")}
-            className={`px-4 py-1.5 rounded-lg text-sm font-bold transition ${
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
               selectedWeek === "total"
-                ? "bg-purple-600 text-white"
-                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                ? "bg-purple-600 text-white shadow-sm"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
           >
             Total
@@ -100,62 +100,54 @@ export default function LeaderboardSection() {
             <button
               key={w}
               onClick={() => handleFilter(w)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                 selectedWeek === w
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
               }`}
             >
-              Week {w}
+              W{w}
             </button>
           ))}
         </div>
       </div>
 
       {loading ? (
-        <div className="text-center py-12">
-          <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading leaderboard...</p>
+        <div className="text-center py-16">
+          <div className="animate-spin w-7 h-7 border-[3px] border-blue-600 border-t-transparent rounded-full mx-auto mb-3"></div>
+          <p className="text-gray-400 text-sm">Loading leaderboard...</p>
         </div>
       ) : selectedWeek === "total" ? (
-        /* ========= CUMULATIVE TOTAL VIEW ========= */
         cumulativeData.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-gray-300">
+              <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Rank</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Roll Number</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Total Score</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Weeks</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Avg %</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Rank</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Roll Number</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Score</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Weeks</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Avg %</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-gray-100">
                 {cumulativeData.map((entry, idx) => (
-                  <tr
-                    key={idx}
-                    className={`border-b border-gray-200 transition-colors ${
-                      idx % 2 === 0 ? "bg-white" : "bg-gray-50"
-                    } hover:bg-purple-50`}
-                  >
-                    <td className="px-6 py-4">
-                      <span className={`inline-block px-3 py-1 rounded-lg font-bold text-sm border ${getRankColor(idx)}`}>
+                  <tr key={idx} className="hover:bg-gray-50 transition">
+                    <td className="px-6 py-3.5">
+                      <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg font-bold text-sm ${getRankColor(idx)}`}>
                         {getRankDisplay(idx)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-gray-900 font-semibold">{entry.roll_number}</td>
-                    <td className="px-6 py-4">
-                      <span className="inline-block bg-purple-100 text-purple-900 px-4 py-2 rounded-lg font-bold text-lg">
+                    <td className="px-6 py-3.5 text-gray-900 font-semibold text-sm">{entry.roll_number}</td>
+                    <td className="px-6 py-3.5">
+                      <span className="inline-flex items-center bg-purple-50 text-purple-700 px-3 py-1.5 rounded-lg font-bold text-sm">
                         {entry.total_score}
                       </span>
                     </td>
-                    <td className="px-6 py-4">
-                      <span className="text-gray-700 font-medium">{entry.weeks_completed}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-block px-3 py-1 rounded text-xs font-bold ${
-                        entry.avg_percentage >= 70 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                    <td className="px-6 py-3.5 text-gray-600 text-sm">{entry.weeks_completed}</td>
+                    <td className="px-6 py-3.5">
+                      <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${
+                        entry.avg_percentage >= 70 ? "bg-green-50 text-green-700" : "bg-yellow-50 text-yellow-700"
                       }`}>
                         {entry.avg_percentage}%
                       </span>
@@ -166,51 +158,48 @@ export default function LeaderboardSection() {
             </table>
           </div>
         ) : (
-          <div className="text-center py-12">
-            <p className="text-gray-600">No scores recorded yet. Take a test to appear on the leaderboard!</p>
+          <div className="text-center py-16">
+            <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
+              <span className="text-xl">🏆</span>
+            </div>
+            <p className="text-gray-500 text-sm">No scores recorded yet. Take a test to appear on the leaderboard!</p>
           </div>
         )
       ) : (
-        /* ========= SINGLE WEEK VIEW ========= */
         weeklyData.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-100 border-b border-gray-300">
+              <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Rank</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Roll Number</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Score</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Percentage</th>
-                  <th className="px-6 py-4 text-left font-semibold text-gray-900">Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Rank</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Roll Number</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Score</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Percentage</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-gray-100">
                 {weeklyData.map((entry, idx) => (
-                  <tr
-                    key={idx}
-                    className={`border-b border-gray-200 transition-colors ${
-                      idx % 2 === 0 ? "bg-white" : "bg-gray-50"
-                    } hover:bg-blue-50`}
-                  >
-                    <td className="px-6 py-4">
-                      <span className={`inline-block px-3 py-1 rounded-lg font-bold text-sm border ${getRankColor(idx)}`}>
+                  <tr key={idx} className="hover:bg-gray-50 transition">
+                    <td className="px-6 py-3.5">
+                      <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg font-bold text-sm ${getRankColor(idx)}`}>
                         {getRankDisplay(idx)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-gray-900 font-semibold">{entry.roll_number}</td>
-                    <td className="px-6 py-4">
-                      <span className="inline-block bg-blue-100 text-blue-900 px-4 py-2 rounded-lg font-bold text-sm">
+                    <td className="px-6 py-3.5 text-gray-900 font-semibold text-sm">{entry.roll_number}</td>
+                    <td className="px-6 py-3.5">
+                      <span className="inline-flex items-center bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg font-bold text-xs">
                         {entry.score}/10
                       </span>
                     </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-block px-3 py-1 rounded text-xs font-bold ${
-                        entry.percentage >= 70 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                    <td className="px-6 py-3.5">
+                      <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${
+                        entry.percentage >= 70 ? "bg-green-50 text-green-700" : "bg-yellow-50 text-yellow-700"
                       }`}>
                         {entry.percentage}%
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-gray-600 text-sm">
+                    <td className="px-6 py-3.5 text-gray-500 text-xs">
                       {new Date(entry.completed_at).toLocaleDateString()}
                     </td>
                   </tr>
@@ -219,8 +208,11 @@ export default function LeaderboardSection() {
             </table>
           </div>
         ) : (
-          <div className="text-center py-12">
-            <p className="text-gray-600">
+          <div className="text-center py-16">
+            <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
+              <span className="text-xl">📊</span>
+            </div>
+            <p className="text-gray-500 text-sm">
               {selectedWeek === currentWeek
                 ? "No scores yet for this week. Be the first to take the test!"
                 : `No results for Week ${selectedWeek}.`}

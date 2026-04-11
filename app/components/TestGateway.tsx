@@ -3,91 +3,109 @@
 import Link from "next/link";
 
 export default function TestGateway() {
-  const levels = [
-    {
-      level: 1,
-      title: "Beginner",
-      description: "Test your basic knowledge",
-      questions: 10,
-      duration: "10 mins",
-      color: "bg-blue-50",
-      borderColor: "border-blue-300",
-      textColor: "text-blue-700",
-    },
-    {
-      level: 2,
-      title: "Intermediate",
-      description: "Challenge your skills",
-      questions: 15,
-      duration: "15 mins",
-      color: "bg-green-50",
-      borderColor: "border-green-300",
-      textColor: "text-green-700",
-    },
-    {
-      level: 3,
-      title: "Advanced",
-      description: "Master your expertise",
-      questions: 20,
-      duration: "20 mins",
-      color: "bg-purple-50",
-      borderColor: "border-purple-300",
-      textColor: "text-purple-700",
-    },
-  ];
-
   return (
-    <div className="bg-white rounded-lg shadow p-8">
-      <h2 className="text-2xl font-bold text-gray-900 mb-2">Start Assessment</h2>
-      <p className="text-gray-600 mb-8">
-        Choose a difficulty level to begin your assessment
-      </p>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-1">Start Assessment</h2>
+        <p className="text-gray-500 text-sm">Choose your assessment type</p>
+      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {levels.map((level) => (
-          <div
-            key={level.level}
-            className={`${level.color} rounded-lg p-6 border-2 ${level.borderColor} transition-all hover:shadow-lg hover:border-opacity-100`}
-          >
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex-1">
-                <h3 className={`text-xl font-bold ${level.textColor}`}>{level.title}</h3>
-                <p className="text-gray-700 mt-1 text-sm">{level.description}</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* L1 - Aptitude */}
+        <div className="group relative bg-white rounded-2xl border border-gray-200 p-8 hover:shadow-xl hover:border-blue-300 transition-all duration-300 overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-blue-50 to-transparent rounded-bl-full" />
+          <div className="relative">
+            <div className="flex items-center justify-between mb-6">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/25">
+                <span className="text-2xl">📝</span>
               </div>
-              <span className={`text-3xl font-bold ${level.textColor} ml-4`}>L{level.level}</span>
+              <span className="text-sm font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">L1</span>
             </div>
-
-            <div className="space-y-2 mb-6 py-4 border-t border-b border-current border-opacity-20">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-700">Questions:</span>
-                <span className={`font-bold ${level.textColor}`}>{level.questions}</span>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Aptitude Test</h3>
+            <p className="text-gray-500 text-sm mb-6 leading-relaxed">
+              Weekly MCQ assessment covering aptitude, reasoning, and analytical skills. AI-generated fresh questions.
+            </p>
+            <div className="flex items-center gap-6 mb-6 py-4 border-t border-b border-gray-100">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-gray-900">10</p>
+                <p className="text-xs text-gray-500">Questions</p>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-700">Duration:</span>
-                <span className={`font-bold ${level.textColor}`}>{level.duration}</span>
+              <div className="w-px h-10 bg-gray-200" />
+              <div className="text-center">
+                <p className="text-2xl font-bold text-gray-900">10</p>
+                <p className="text-xs text-gray-500">Minutes</p>
+              </div>
+              <div className="w-px h-10 bg-gray-200" />
+              <div className="text-center">
+                <p className="text-2xl font-bold text-gray-900">MCQ</p>
+                <p className="text-xs text-gray-500">Format</p>
               </div>
             </div>
-
-            <Link href={`/dashboard/test/l${level.level}`}>
-              <button
-                className={`w-full py-2 px-4 font-bold rounded-lg transition bg-white border-2 ${level.borderColor} ${level.textColor} hover:bg-gray-50`}
-              >
-                Start Test
+            <Link href="/dashboard/test/l1">
+              <button className="w-full py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-semibold rounded-xl hover:from-blue-500 hover:to-blue-600 transition-all shadow-lg shadow-blue-600/20 group-hover:shadow-blue-600/30">
+                Start Aptitude Test
               </button>
             </Link>
           </div>
-        ))}
+        </div>
+
+        {/* L2 - Coding */}
+        <div className="group relative bg-white rounded-2xl border border-gray-200 p-8 hover:shadow-xl hover:border-green-300 transition-all duration-300 overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-green-50 to-transparent rounded-bl-full" />
+          <div className="relative">
+            <div className="flex items-center justify-between mb-6">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center shadow-lg shadow-green-500/25">
+                <span className="text-2xl">💻</span>
+              </div>
+              <span className="text-sm font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full">L2</span>
+            </div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Coding Challenge</h3>
+            <p className="text-gray-500 text-sm mb-6 leading-relaxed">
+              Weekly DSA coding problems with a built-in editor. Write in Python, Java, or C — auto-validated against test cases.
+            </p>
+            <div className="flex items-center gap-6 mb-6 py-4 border-t border-b border-gray-100">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-gray-900">4</p>
+                <p className="text-xs text-gray-500">Problems</p>
+              </div>
+              <div className="w-px h-10 bg-gray-200" />
+              <div className="text-center">
+                <p className="text-2xl font-bold text-gray-900">3</p>
+                <p className="text-xs text-gray-500">Languages</p>
+              </div>
+              <div className="w-px h-10 bg-gray-200" />
+              <div className="text-center">
+                <p className="text-2xl font-bold text-gray-900">Code</p>
+                <p className="text-xs text-gray-500">Format</p>
+              </div>
+            </div>
+            <Link href="/dashboard/test/l2">
+              <button className="w-full py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-semibold rounded-xl hover:from-green-500 hover:to-green-600 transition-all shadow-lg shadow-green-600/20 group-hover:shadow-green-600/30">
+                Start Coding Challenge
+              </button>
+            </Link>
+          </div>
+        </div>
       </div>
 
-      <div className="mt-12 bg-gray-100 rounded-lg p-6">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">Test Guidelines</h3>
-        <ul className="text-gray-700 space-y-2 text-sm">
-          <li>• Each level contains multiple choice questions</li>
-          <li>• You have a limited time to complete each test</li>
-          <li>• Your score will be recorded and displayed on the leaderboard</li>
-          <li>• You can retake tests at any time to improve your score</li>
-          <li>• Higher levels require completion of previous levels</li>
-        </ul>
+      {/* Guidelines */}
+      <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100">
+        <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">Test Guidelines</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {[
+            "Fullscreen mode is required during tests",
+            "Exiting fullscreen or switching tabs counts as a violation",
+            "3 violations will auto-submit your test",
+            "Each test can only be taken once per week",
+            "Scores are recorded on the leaderboard",
+            "L1 is MCQ-based, L2 requires writing code",
+          ].map((rule, i) => (
+            <div key={i} className="flex items-start gap-2 text-sm text-gray-600">
+              <span className="text-blue-500 mt-0.5 flex-shrink-0">•</span>
+              <span>{rule}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

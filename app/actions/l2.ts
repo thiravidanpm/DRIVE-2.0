@@ -2,6 +2,10 @@
 
 import { supabase } from "@/lib/supabase";
 import { runCodeAgainstTests, type TestCase } from "@/lib/pistonService";
+import { scoreCodeWithAI } from "@/lib/groqCodeScorer";
+
+const MARKS_PER_PROBLEM = 20; // Full marks when all test cases pass
+const MAX_AI_SCORE = 15; // Max marks AI can give when test cases fail
 
 // ==================== L2 WEEK MANAGEMENT ====================
 
@@ -184,10 +188,9 @@ export async function getUserL2Submissions(
   try {
     const { data, error } = await supabase
       .from("l2_submissions")
-      .select("problem_id, status, language, submitted_at")
+      .select("problem_id, status, language, score, ai_score, ai_feedback, submitted_at")
       .eq("user_id", userId)
       .eq("week_number", weekNumber)
-      .eq("status", "passed")
       .order("submitted_at", { ascending: false });
 
     if (error) return { success: false };
@@ -197,23 +200,77 @@ export async function getUserL2Submissions(
   }
 }
 
+// Check if user has already attempted a specific problem (one-time attempt)
+export async function hasUserAttemptedProblem(
+  userId: number,
+  problemId: number
+): Promise<{ attempted: boolean; submission?: any }> {
+  try {
+    const { data, error } = await supabase
+      .from("l2_submissions")
+      .select("id, status, score, ai_score, ai_feedback, submitted_at")
+      .eq("user_id", userId)
+      .eq("problem_id", problemId)
+      .limit(1)
+      .single();
+
+    if (error && error.code === "PGRST116") return { attempted: false };
+    if (error) return { attempted: false };
+    return { attempted: true, submission: data };
+  } catch {
+    return { attempted: false };
+  }
+}
+
+// Get all attempted problem IDs for a user (across all weeks)
+export async function getUserAttemptedProblems(
+  userId: number
+): Promise<{ success: boolean; attemptedMap: Record<number, { status: string; score: number; ai_score?: number }> }> {
+  try {
+    const { data, error } = await supabase
+      .from("l2_submissions")
+      .select("problem_id, status, score, ai_score")
+      .eq("user_id", userId);
+
+    if (error) return { success: false, attemptedMap: {} };
+
+    const map: Record<number, { status: string; score: number; ai_score?: number }> = {};
+    for (const s of data || []) {
+      map[s.problem_id] = { status: s.status, score: s.score, ai_score: s.ai_score };
+    }
+    return { success: true, attemptedMap: map };
+  } catch {
+    return { success: false, attemptedMap: {} };
+  }
+}
+
 export async function submitL2Solution(
   userId: number,
   problemId: number,
   weekNumber: number,
   code: string,
-  language: string
+  language: string,
+  timeExpired: boolean = false
 ): Promise<{
   success: boolean;
   message: string;
   results?: any;
   allPassed?: boolean;
+  score?: number;
+  aiScore?: number;
+  aiFeedback?: string;
 }> {
   try {
-    // Get problem test cases
+    // Check one-time attempt
+    const { attempted } = await hasUserAttemptedProblem(userId, problemId);
+    if (attempted) {
+      return { success: false, message: "You have already attempted this problem. Only one attempt is allowed." };
+    }
+
+    // Get problem details
     const { data: problem, error: pErr } = await supabase
       .from("l2_problems")
-      .select("test_cases")
+      .select("title, description, test_cases")
       .eq("id", problemId)
       .single();
 
@@ -226,46 +283,104 @@ export async function submitL2Solution(
       return { success: false, message: "No test cases available for this problem" };
     }
 
-    // Execute code against test cases
+    // Execute code against test cases FIRST
     const execResult = await runCodeAgainstTests(code, language, testCases);
 
+    let finalScore = 0;
+    let aiScore: number | undefined;
+    let aiFeedback: string | undefined;
+    let status: string;
+
     if (!execResult.success) {
-      return { success: false, message: execResult.error || "Execution failed" };
+      // Execution failed completely - use AI to score
+      status = "error";
+      if (code.trim()) {
+        const aiResult = await scoreCodeWithAI(
+          problem.title,
+          problem.description,
+          code,
+          language,
+          testCases.map((tc) => ({
+            input: tc.input,
+            expected: tc.expected_output,
+            actual: "Execution Error",
+            passed: false,
+          }))
+        );
+        aiScore = aiResult.score;
+        aiFeedback = aiResult.feedback;
+        finalScore = aiScore;
+      }
+    } else if (execResult.allPassed) {
+      // All test cases passed → 20 marks
+      status = "passed";
+      finalScore = MARKS_PER_PROBLEM;
+    } else {
+      // Some/all test cases failed → AI scores 0-15
+      status = "failed";
+      const aiResult = await scoreCodeWithAI(
+        problem.title,
+        problem.description,
+        code,
+        language,
+        execResult.results.map((r) => ({
+          input: r.input,
+          expected: r.expected,
+          actual: r.actual,
+          passed: r.passed,
+        }))
+      );
+      aiScore = aiResult.score;
+      aiFeedback = aiResult.feedback;
+      finalScore = aiScore;
     }
 
-    const status = execResult.allPassed ? "passed" : "failed";
-
-    // Save submission
-    await supabase.from("l2_submissions").insert([{
+    // Save submission (one-time, unique constraint enforced)
+    const { error: insertErr } = await supabase.from("l2_submissions").insert([{
       user_id: userId,
       problem_id: problemId,
       week_number: weekNumber,
       language,
       code,
       status,
-      test_results: execResult.results,
+      score: finalScore,
+      ai_score: aiScore || null,
+      ai_feedback: aiFeedback || null,
+      test_results: execResult.success ? execResult.results : [],
+      time_expired: timeExpired,
       submitted_at: new Date().toISOString(),
     }]);
 
-    // If all passed, check if we should complete the week
-    if (execResult.allPassed) {
-      await checkAndCompleteL2Week(userId, weekNumber);
+    if (insertErr) {
+      // Unique constraint violation = already attempted
+      if (insertErr.code === "23505") {
+        return { success: false, message: "You have already attempted this problem." };
+      }
+      return { success: false, message: insertErr.message };
     }
+
+    // Update weekly results
+    await updateL2WeeklyResults(userId, weekNumber);
+
+    const scoreMsg = execResult.allPassed
+      ? `All ${execResult.totalTests} test cases passed! Score: ${finalScore}/${MARKS_PER_PROBLEM}`
+      : `${execResult.success ? execResult.totalPassed : 0}/${execResult.success ? execResult.totalTests : testCases.length} test cases passed. AI Score: ${aiScore ?? 0}/${MAX_AI_SCORE}`;
 
     return {
       success: true,
-      message: execResult.allPassed
-        ? `All ${execResult.totalTests} test cases passed!`
-        : `${execResult.totalPassed}/${execResult.totalTests} test cases passed`,
-      results: execResult.results,
-      allPassed: execResult.allPassed,
+      message: scoreMsg,
+      results: execResult.success ? execResult.results : [],
+      allPassed: execResult.allPassed || false,
+      score: finalScore,
+      aiScore,
+      aiFeedback,
     };
   } catch (error: any) {
     return { success: false, message: error.message || "Submission failed" };
   }
 }
 
-async function checkAndCompleteL2Week(userId: number, weekNumber: number) {
+async function updateL2WeeklyResults(userId: number, weekNumber: number) {
   try {
     // Get all problems for this week
     const { data: weekProblems } = await supabase
@@ -277,16 +392,16 @@ async function checkAndCompleteL2Week(userId: number, weekNumber: number) {
 
     const problemIds = weekProblems.map((p) => p.id);
 
-    // Get passed submissions for this user this week
-    const { data: passedSubs } = await supabase
+    // Get all submissions for this user's week problems
+    const { data: subs } = await supabase
       .from("l2_submissions")
-      .select("problem_id")
+      .select("problem_id, status, score")
       .eq("user_id", userId)
-      .eq("week_number", weekNumber)
-      .eq("status", "passed");
+      .in("problem_id", problemIds);
 
-    const solvedIds = new Set((passedSubs || []).map((s) => s.problem_id));
-    const problemsSolved = problemIds.filter((id) => solvedIds.has(id)).length;
+    const subMap = new Map((subs || []).map((s) => [s.problem_id, s]));
+    const problemsSolved = (subs || []).filter((s) => s.status === "passed").length;
+    const totalScore = (subs || []).reduce((sum, s) => sum + (s.score || 0), 0);
 
     // Upsert weekly result
     const { data: existing } = await supabase
@@ -302,7 +417,7 @@ async function checkAndCompleteL2Week(userId: number, weekNumber: number) {
         .update({
           problems_solved: problemsSolved,
           total_problems: problemIds.length,
-          score: problemsSolved,
+          score: totalScore,
           completed_at: new Date().toISOString(),
         })
         .eq("id", existing.id);
@@ -312,7 +427,7 @@ async function checkAndCompleteL2Week(userId: number, weekNumber: number) {
         week_number: weekNumber,
         problems_solved: problemsSolved,
         total_problems: problemIds.length,
-        score: problemsSolved,
+        score: totalScore,
         completed_at: new Date().toISOString(),
       }]);
     }
@@ -517,4 +632,115 @@ function getDefaultStarterCode() {
     java: `import java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        // Write your code here\n    }\n}`,
     c: `#include <stdio.h>\n\nint main() {\n    // Write your code here\n    return 0;\n}`,
   };
+}
+
+// ==================== L2 PULLED WEEKS (ADMIN) ====================
+
+export async function getL2PulledWeeks(): Promise<{ success: boolean; pulledWeeks: number[] }> {
+  try {
+    const { data, error } = await supabase
+      .from("app_config")
+      .select("l2_pulled_weeks")
+      .eq("id", 1)
+      .single();
+
+    if (error) return { success: false, pulledWeeks: [] };
+    return { success: true, pulledWeeks: data?.l2_pulled_weeks || [] };
+  } catch {
+    return { success: false, pulledWeeks: [] };
+  }
+}
+
+export async function pullL2Week(weekNumber: number): Promise<{ success: boolean; message: string }> {
+  try {
+    const { week: currentWeek } = await getL2CurrentWeek();
+
+    // Can only pull weeks < current week
+    if (weekNumber >= currentWeek) {
+      return { success: false, message: `Can only pull weeks before current week (${currentWeek})` };
+    }
+
+    const { pulledWeeks } = await getL2PulledWeeks();
+
+    if (pulledWeeks.includes(weekNumber)) {
+      return { success: false, message: `Week ${weekNumber} is already pulled` };
+    }
+
+    const updated = [...pulledWeeks, weekNumber].sort((a, b) => a - b);
+
+    const { error } = await supabase
+      .from("app_config")
+      .update({ l2_pulled_weeks: updated, updated_at: new Date().toISOString() })
+      .eq("id", 1);
+
+    if (error) return { success: false, message: error.message };
+
+    await supabase.from("admin_logs").insert([{
+      action: "L2 Week Pulled",
+      details: `Pulled Week ${weekNumber} into current assessment (Week ${currentWeek}).`,
+      status: "Success",
+    }]).then(() => {});
+
+    return { success: true, message: `Week ${weekNumber} pulled! Students can now attempt those problems.` };
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
+}
+
+export async function unpullL2Week(weekNumber: number): Promise<{ success: boolean; message: string }> {
+  try {
+    const { pulledWeeks } = await getL2PulledWeeks();
+    const updated = pulledWeeks.filter((w) => w !== weekNumber);
+
+    const { error } = await supabase
+      .from("app_config")
+      .update({ l2_pulled_weeks: updated, updated_at: new Date().toISOString() })
+      .eq("id", 1);
+
+    if (error) return { success: false, message: error.message };
+    return { success: true, message: `Week ${weekNumber} unpulled.` };
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
+}
+
+// Get all problems available to a student (current week + pulled weeks)
+export async function getStudentAvailableProblems(weekNumber: number): Promise<{
+  success: boolean;
+  currentWeekProblems: any[];
+  pulledWeekProblems: { week: number; problems: any[] }[];
+}> {
+  try {
+    // Get current week problems
+    const { data: currentProbs } = await supabase
+      .from("l2_problems")
+      .select("*")
+      .eq("week_number", weekNumber)
+      .order("problem_order", { ascending: true });
+
+    // Get pulled weeks
+    const { pulledWeeks } = await getL2PulledWeeks();
+
+    const pulledWeekProblems: { week: number; problems: any[] }[] = [];
+
+    for (const pw of pulledWeeks) {
+      const { data: probs } = await supabase
+        .from("l2_problems")
+        .select("*")
+        .eq("week_number", pw)
+        .order("problem_order", { ascending: true });
+
+      if (probs && probs.length > 0) {
+        pulledWeekProblems.push({ week: pw, problems: probs });
+      }
+    }
+
+    return {
+      success: true,
+      currentWeekProblems: currentProbs || [],
+      pulledWeekProblems,
+    };
+  } catch {
+    return { success: true, currentWeekProblems: [], pulledWeekProblems: [] };
+  }
 }
