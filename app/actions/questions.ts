@@ -185,17 +185,17 @@ export async function getQuestionCountByLevel() {
   }
 }
 
-// Sync questions from webhook - USES ROBUST SERVICE
+// Sync questions using Groq AI generation
 export async function syncQuestionsFromWebhook() {
   try {
-    const { syncQuestionsFromWebhookRobust } = await import("@/lib/webhookService");
-    const result = await syncQuestionsFromWebhookRobust();
+    const { generateAndSyncQuestions } = await import("@/lib/groqService");
+    const result = await generateAndSyncQuestions();
     return result;
   } catch (error: any) {
-    console.error("Webhook sync error:", error);
+    console.error("AI sync error:", error);
     return {
       success: false,
-      message: error.message || "Unknown error during webhook sync",
+      message: error.message || "Unknown error during AI question generation",
       data: { count: 0, added: 0, duplicates: 0, errors: [error.message] },
     };
   }
@@ -221,4 +221,6 @@ export async function getAllQuestionsForDownload(level?: number) {
     return { success: false, message: error.message };
   }
 }
+
+
 

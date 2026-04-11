@@ -19,11 +19,19 @@ import {
   syncQuestionsFromWebhook,
   getAllQuestionsForDownload,
 } from "@/app/actions/questions";
+import {
+  getCurrentWeek,
+  startNewWeek,
+  getWeeklyCompletionStatus,
+  resetUsersForWeek,
+  getWeeklyLeaderboard,
+  getCumulativeLeaderboard,
+} from "@/app/actions/weekly";
 import { formatQuestionForDownload } from "@/lib/webhookParser";
 
 export default function SuperAdminPage() {
   const [isUnlocked, setIsUnlocked] = useState(false);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "users" | "questions">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "users" | "questions" | "weekly">("dashboard");
   const [users, setUsers] = useState<any[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
   const [stats, setStats] = useState({ totalUsers: 0, totalScores: 0, totalProgress: 0 });
@@ -34,6 +42,15 @@ export default function SuperAdminPage() {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [selectedLevel, setSelectedLevel] = useState(1);
   const [syncMessage, setSyncMessage] = useState("");
+
+  // Weekly system state
+  const [currentWeek, setCurrentWeek] = useState(1);
+  const [weeklyCompleted, setWeeklyCompleted] = useState<{ user_id: number; roll_number: string; score: number; percentage: number }[]>([]);
+  const [weeklyPending, setWeeklyPending] = useState<{ user_id: number; roll_number: string }[]>([]);
+  const [selectedResetUsers, setSelectedResetUsers] = useState<Set<number>>(new Set());
+  const [weeklyLeaderboard, setWeeklyLeaderboard] = useState<any[]>([]);
+  const [cumulativeLeaderboard, setCumulativeLeaderboard] = useState<{roll_number:string;total_score:number;weeks_completed:number;avg_percentage:number}[]>([]);
+  const [weeklyMessage, setWeeklyMessage] = useState("");
 
   // Konami code activation
   useKonamiCode(() => {
@@ -49,6 +66,10 @@ export default function SuperAdminPage() {
   const loadDashboard = async () => {
     setLoading(true);
 
+    // Always load current week
+    const weekRes = await getCurrentWeek();
+    setCurrentWeek(weekRes.week);
+
     if (activeTab === "dashboard") {
       const statResult = await getUserStatistics();
       if (statResult.success && statResult.data) {
@@ -63,6 +84,20 @@ export default function SuperAdminPage() {
       const result = await getAllQuestions(selectedLevel);
       if (result.success) {
         setQuestions(result.data || []);
+      }
+    } else if (activeTab === "weekly") {
+      const statusRes = await getWeeklyCompletionStatus(weekRes.week);
+      if (statusRes.success) {
+        setWeeklyCompleted(statusRes.completed);
+        setWeeklyPending(statusRes.pending);
+      }
+      const lbRes = await getWeeklyLeaderboard(weekRes.week);
+      if (lbRes.success && lbRes.data) {
+        setWeeklyLeaderboard(lbRes.data);
+      }
+      const cumRes = await getCumulativeLeaderboard();
+      if (cumRes.success && cumRes.data) {
+        setCumulativeLeaderboard(cumRes.data);
       }
     }
 
@@ -170,19 +205,71 @@ export default function SuperAdminPage() {
     }
   };
 
+  const handleStartNewWeek = async () => {
+    if (!window.confirm(`Start Week ${currentWeek + 1}? This will allow all students to take the test again. Make sure you have generated new questions first.`)) {
+      return;
+    }
+    setLoading(true);
+    setWeeklyMessage("");
+    const result = await startNewWeek();
+    if (result.success) {
+      setCurrentWeek(result.newWeek || currentWeek + 1);
+      setWeeklyMessage(`✅ ${result.message}`);
+      await loadDashboard();
+    } else {
+      setWeeklyMessage(`❌ ${result.message}`);
+    }
+    setLoading(false);
+  };
+
+  const handleToggleResetUser = (userId: number) => {
+    setSelectedResetUsers((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) {
+        next.delete(userId);
+      } else {
+        next.add(userId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllCompleted = () => {
+    if (selectedResetUsers.size === weeklyCompleted.length) {
+      setSelectedResetUsers(new Set());
+    } else {
+      setSelectedResetUsers(new Set(weeklyCompleted.map((u) => u.user_id)));
+    }
+  };
+
+  const handleResetSelectedUsers = async () => {
+    if (selectedResetUsers.size === 0) return;
+    if (!window.confirm(`Reset ${selectedResetUsers.size} user(s) for Week ${currentWeek}? They will be able to retake the test.`)) {
+      return;
+    }
+    setLoading(true);
+    setWeeklyMessage("");
+    const result = await resetUsersForWeek(Array.from(selectedResetUsers), currentWeek);
+    if (result.success) {
+      setWeeklyMessage(`✅ ${result.message}`);
+      setSelectedResetUsers(new Set());
+      await loadDashboard();
+    } else {
+      setWeeklyMessage(`❌ ${result.message}`);
+    }
+    setLoading(false);
+  };
+
   if (!isUnlocked) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
         <div className="text-center">
-          <h1 className="text-4xl font-bold text-white mb-4">🎮 Admin Portal Locked</h1>
+          <h1 className="text-4xl font-bold text-white mb-4">🔒 Access Restricted</h1>
           <p className="text-gray-400 text-lg mb-8">
-            Enter the secret code to unlock: ↑ ↑ ↓ ↓ ← → ← → P M
+            This area requires special authentication.
           </p>
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 max-w-md mx-auto">
-            <p className="text-gray-300 mb-4">Try pressing the Konami code on your keyboard...</p>
-            <div className="text-2xl font-mono text-yellow-400">
-              Use Arrow Keys + P + M
-            </div>
+            <p className="text-gray-300">Authorized personnel only.</p>
           </div>
         </div>
       </div>
@@ -208,7 +295,7 @@ export default function SuperAdminPage() {
 
           {/* Tab Navigation */}
           <div className="flex gap-2">
-            {["dashboard", "users", "questions"].map((tab) => (
+            {["dashboard", "users", "questions", "weekly"].map((tab) => (
               <button
                 key={tab}
                 onClick={() => {
@@ -224,6 +311,7 @@ export default function SuperAdminPage() {
                 {tab === "dashboard" && "📊 Dashboard"}
                 {tab === "users" && "👥 Users"}
                 {tab === "questions" && "❓ Questions"}
+                {tab === "weekly" && `📅 Week ${currentWeek}`}
               </button>
             ))}
           </div>
@@ -459,14 +547,14 @@ export default function SuperAdminPage() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6">
                 <div className="flex justify-between items-start gap-6">
                   <div className="flex-1">
-                    <h3 className="font-semibold text-blue-900 mb-2">🔄 Webhook Sync - Real-Time Question Sync</h3>
+                    <h3 className="font-semibold text-blue-900 mb-2">🤖 AI Generate - Smart Question Sync</h3>
                     <p className="text-sm text-blue-700 mb-4 leading-relaxed">
-                      Fetches questions from webhook and updates Level 1 questions. The system will:
-                      <br />• Connect to webhook with retry logic (max 3 retries)
-                      <br />• Validate and parse questions in multiple formats
+                      Generates fresh aptitude questions using Groq AI and adds them to Level 1. The system will:
+                      <br />• Pick random topics from 41 IndiaBIX categories
+                      <br />• Generate unique questions with AI (Llama 3.3 70B)
+                      <br />• Validate question format and options
                       <br />• Remove duplicates automatically
-                      <br />• Delete old Level 1 webhook questions
-                      <br />• Insert new questions in batches
+                      <br />• Insert new questions into the database
                       <br />• Handle all errors gracefully
                     </p>
                     {syncing && (
@@ -606,6 +694,207 @@ export default function SuperAdminPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Weekly Tab */}
+        {activeTab === "weekly" && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold text-gray-900">Week {currentWeek} Management</h2>
+              <button
+                onClick={handleStartNewWeek}
+                disabled={loading}
+                className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition font-semibold"
+              >
+                🔄 Start New Week (Week {currentWeek + 1})
+              </button>
+            </div>
+
+            {weeklyMessage && (
+              <div className={`p-4 rounded-lg text-sm font-medium border ${
+                weeklyMessage.startsWith("✅")
+                  ? "bg-green-100 text-green-800 border-green-200"
+                  : "bg-red-100 text-red-800 border-red-200"
+              }`}>
+                {weeklyMessage}
+              </div>
+            )}
+
+            {/* Completion Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-green-50 border-l-4 border-green-600 rounded-lg p-6">
+                <p className="text-gray-600 text-sm font-medium">Completed</p>
+                <p className="text-4xl font-bold text-green-600">{weeklyCompleted.length}</p>
+              </div>
+              <div className="bg-yellow-50 border-l-4 border-yellow-600 rounded-lg p-6">
+                <p className="text-gray-600 text-sm font-medium">Pending</p>
+                <p className="text-4xl font-bold text-yellow-600">{weeklyPending.length}</p>
+              </div>
+              <div className="bg-blue-50 border-l-4 border-blue-600 rounded-lg p-6">
+                <p className="text-gray-600 text-sm font-medium">Total Students</p>
+                <p className="text-4xl font-bold text-blue-600">{weeklyCompleted.length + weeklyPending.length}</p>
+              </div>
+            </div>
+
+            {/* Completed Users - with reset selection */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold text-gray-900">
+                  ✅ Completed ({weeklyCompleted.length})
+                </h3>
+                {weeklyCompleted.length > 0 && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSelectAllCompleted}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition text-sm font-semibold"
+                    >
+                      {selectedResetUsers.size === weeklyCompleted.length ? "Deselect All" : "Select All"}
+                    </button>
+                    <button
+                      onClick={handleResetSelectedUsers}
+                      disabled={selectedResetUsers.size === 0 || loading}
+                      className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition text-sm font-semibold"
+                    >
+                      🔁 Reset Selected ({selectedResetUsers.size})
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {weeklyCompleted.length === 0 ? (
+                <p className="text-gray-500">No students have completed this week&apos;s test yet.</p>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {weeklyCompleted.map((u) => (
+                    <div
+                      key={u.user_id}
+                      onClick={() => handleToggleResetUser(u.user_id)}
+                      className={`flex justify-between items-center p-3 rounded-lg cursor-pointer transition border ${
+                        selectedResetUsers.has(u.user_id)
+                          ? "bg-red-50 border-red-300"
+                          : "bg-gray-50 border-gray-200 hover:bg-gray-100"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedResetUsers.has(u.user_id)}
+                          onChange={() => handleToggleResetUser(u.user_id)}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                        <span className="font-semibold text-gray-900">{u.roll_number}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-blue-600 font-bold">{u.score}/10</span>
+                        <span className={`px-2 py-1 rounded text-xs font-bold ${
+                          u.score >= 7 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                        }`}>
+                          {u.percentage}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Pending Users */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <h3 className="text-lg font-bold text-gray-900 mb-4">
+                ⏳ Pending ({weeklyPending.length})
+              </h3>
+              {weeklyPending.length === 0 ? (
+                <p className="text-gray-500">All students have completed this week&apos;s test!</p>
+              ) : (
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
+                  {weeklyPending.map((u) => (
+                    <span
+                      key={u.user_id}
+                      className="px-3 py-1 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800 font-medium"
+                    >
+                      {u.roll_number}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Weekly Leaderboard */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <h3 className="text-lg font-bold text-gray-900 mb-4">🏆 Week {currentWeek} Leaderboard</h3>
+              {weeklyLeaderboard.length === 0 ? (
+                <p className="text-gray-500">No results yet for this week.</p>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-gray-100 border-b">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Rank</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Roll Number</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Score</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Percentage</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weeklyLeaderboard.map((entry, idx) => (
+                      <tr key={idx} className="border-b hover:bg-gray-50">
+                        <td className="px-4 py-3 font-bold text-gray-900">
+                          {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `#${idx + 1}`}
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-gray-900">{entry.roll_number}</td>
+                        <td className="px-4 py-3 font-bold text-blue-600">{entry.score}/10</td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${
+                            entry.percentage >= 70 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                          }`}>
+                            {entry.percentage}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Cumulative Total Leaderboard */}
+            <div className="bg-white rounded-lg border-2 border-purple-200 p-6">
+              <h3 className="text-lg font-bold text-gray-900 mb-4">🏅 Cumulative Total Leaderboard (All Weeks)</h3>
+              {cumulativeLeaderboard.length === 0 ? (
+                <p className="text-gray-500">No cumulative data yet.</p>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-purple-50 border-b">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Rank</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Roll Number</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Total Score</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Weeks</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Avg %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cumulativeLeaderboard.map((entry, idx) => (
+                      <tr key={idx} className="border-b hover:bg-purple-50">
+                        <td className="px-4 py-3 font-bold text-gray-900">
+                          {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `#${idx + 1}`}
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-gray-900">{entry.roll_number}</td>
+                        <td className="px-4 py-3 font-bold text-purple-600 text-lg">{entry.total_score}</td>
+                        <td className="px-4 py-3 text-gray-700">{entry.weeks_completed}</td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${
+                            entry.avg_percentage >= 70 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"
+                          }`}>
+                            {entry.avg_percentage}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
       </div>
