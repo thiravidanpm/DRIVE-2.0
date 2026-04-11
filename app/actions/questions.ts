@@ -170,13 +170,11 @@ export async function getQuestionCountByLevel() {
     const counts = {
       level1: 0,
       level2: 0,
-      level3: 0,
     };
 
     data?.forEach((q) => {
       if (q.level === 1) counts.level1++;
       else if (q.level === 2) counts.level2++;
-      else if (q.level === 3) counts.level3++;
     });
 
     return { success: true, data: counts };
