@@ -12,7 +12,7 @@
 -- ==================== CREATE TABLES (if not exist) ====================
 
 CREATE TABLE IF NOT EXISTS l2_problems (
-  id SERIAL PRIMARY KEY,
+  id SERIAL PRIMARY KEY, 
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'Arrays',

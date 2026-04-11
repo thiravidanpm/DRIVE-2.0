@@ -42,6 +42,7 @@ import {
   pullL2Week,
   unpullL2Week,
 } from "@/app/actions/l2";
+import { inviteCollaborator, getCollaborators, removeCollaborator } from "@/app/actions/github";
 import { formatQuestionForDownload } from "@/lib/webhookParser";
 
 export default function SuperAdminPage() {
@@ -78,6 +79,41 @@ export default function SuperAdminPage() {
   const [l2SelectedResetUsers, setL2SelectedResetUsers] = useState<Set<number>>(new Set());
   const [l2ImportText, setL2ImportText] = useState("");
   const [l2PulledWeeks, setL2PulledWeeks] = useState<number[]>([]);
+
+  // Developers section state
+  const [showDevDialog, setShowDevDialog] = useState(false);
+  const [devInput, setDevInput] = useState("");
+  const [devLoading, setDevLoading] = useState(false);
+  const [devMessage, setDevMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [collaborators, setCollaborators] = useState<{ login: string; avatar_url: string; permissions: any }[]>([]);
+  const [collabLoading, setCollabLoading] = useState(false);
+
+  const handleInviteCollaborator = async () => {
+    if (!devInput.trim()) return;
+    setDevLoading(true);
+    setDevMessage(null);
+    const result = await inviteCollaborator(devInput.trim());
+    setDevMessage({ text: result.message, type: result.success ? "success" : "error" });
+    if (result.success) {
+      setDevInput("");
+      loadCollaborators();
+    }
+    setDevLoading(false);
+  };
+
+  const loadCollaborators = async () => {
+    setCollabLoading(true);
+    const res = await getCollaborators();
+    if (res.success && res.data) setCollaborators(res.data);
+    setCollabLoading(false);
+  };
+
+  const handleRemoveCollaborator = async (username: string) => {
+    if (!window.confirm(`Remove @${username} from collaborators?`)) return;
+    const result = await removeCollaborator(username);
+    setDevMessage({ text: result.message, type: result.success ? "success" : "error" });
+    if (result.success) loadCollaborators();
+  };
 
   // Konami code activation
   useKonamiCode(() => {
@@ -500,8 +536,112 @@ export default function SuperAdminPage() {
                     <p className="text-sm text-purple-700">Dedicated form</p>
                   </button>
                 </Link>
+
+                <button
+                  onClick={() => { setShowDevDialog(true); loadCollaborators(); }}
+                  className="p-4 bg-gray-900 border border-gray-700 rounded-lg hover:bg-gray-800 transition"
+                >
+                  <p className="font-semibold text-white">🛠 Developers</p>
+                  <p className="text-sm text-gray-300">Invite collaborators</p>
+                </button>
               </div>
             </div>
+
+            {/* Developers Dialog */}
+            {showDevDialog && (
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowDevDialog(false)}>
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  {/* Header */}
+                  <div className="bg-gray-900 px-6 py-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center text-lg">🛠</div>
+                      <div>
+                        <h3 className="text-white font-bold text-lg">Invite Collaborator</h3>
+                        <p className="text-gray-400 text-xs">Add developers to the repository</p>
+                      </div>
+                    </div>
+                    <button onClick={() => setShowDevDialog(false)} className="text-gray-400 hover:text-white transition text-xl">✕</button>
+                  </div>
+
+                  <div className="p-6 space-y-5">
+                    {/* Invite Input */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">GitHub Username or Email</label>
+                      <div className="flex gap-2">
+                        <div className="flex-1 relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
+                          <input
+                            type="text"
+                            value={devInput}
+                            onChange={(e) => setDevInput(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleInviteCollaborator()}
+                            placeholder="username or email@example.com"
+                            className="w-full pl-8 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-gray-900 focus:border-gray-900 outline-none text-sm"
+                          />
+                        </div>
+                        <button
+                          onClick={handleInviteCollaborator}
+                          disabled={devLoading || !devInput.trim()}
+                          className="px-5 py-2.5 bg-gray-900 text-white rounded-xl font-semibold text-sm hover:bg-gray-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {devLoading ? "Sending..." : "Invite"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Status Message */}
+                    {devMessage && (
+                      <div className={`p-3 rounded-xl text-sm font-medium ${
+                        devMessage.type === "success" ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"
+                      }`}>
+                        {devMessage.text}
+                      </div>
+                    )}
+
+                    {/* Collaborators List */}
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Current Collaborators</h4>
+                      {collabLoading ? (
+                        <div className="text-center py-4 text-gray-400 text-sm">Loading...</div>
+                      ) : collaborators.length === 0 ? (
+                        <div className="text-center py-4 text-gray-400 text-sm">No collaborators yet, or GitHub not configured</div>
+                      ) : (
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {collaborators.map((c) => (
+                            <div key={c.login} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                              <div className="flex items-center gap-3">
+                                <img src={c.avatar_url} alt={c.login} className="w-8 h-8 rounded-full" />
+                                <div>
+                                  <span className="font-semibold text-gray-900 text-sm">@{c.login}</span>
+                                  <span className="ml-2 text-xs text-gray-400">
+                                    {c.permissions?.admin ? "Admin" : c.permissions?.push ? "Write" : "Read"}
+                                  </span>
+                                </div>
+                              </div>
+                              {!c.permissions?.admin && (
+                                <button
+                                  onClick={() => handleRemoveCollaborator(c.login)}
+                                  className="text-xs text-red-500 hover:text-red-700 font-medium transition"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Setup note */}
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                      <p className="text-xs text-gray-500">
+                        <span className="font-semibold">Setup:</span> Add <code className="bg-gray-200 px-1 rounded">GITHUB_TOKEN</code>, <code className="bg-gray-200 px-1 rounded">GITHUB_REPO_OWNER</code>, and <code className="bg-gray-200 px-1 rounded">GITHUB_REPO_NAME</code> to your .env.local file. The token needs <code className="bg-gray-200 px-1 rounded">repo</code> scope.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
