@@ -32,8 +32,8 @@ export default function Home() {
             Weekly Assessment Platform
           </div>
           <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight mb-6 leading-tight">
-            Assess. Code.
-            <span className="text-gradient"> Excel.</span>
+            Drive - 2.0
+            <span className="text-gradient"> A Upgraded version.</span>
           </h1>
           <p className="text-lg text-gray-400 max-w-2xl mx-auto leading-relaxed">
             Two-level assessment platform — aptitude tests and coding challenges. 
