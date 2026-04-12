@@ -1,8 +1,7 @@
 ﻿"use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import dynamic from "next/dynamic";
 import {
   getL2CurrentWeek,
   getStudentAvailableProblems,
@@ -10,9 +9,6 @@ import {
   getUserL2History,
   submitL2Solution,
 } from "@/app/actions/l2";
-import { quickRunCode } from "@/lib/pistonService";
-
-const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
 const TIMER_SECONDS = 10 * 60; // 10 minutes
 
@@ -23,16 +19,7 @@ interface Problem {
   category: string;
   difficulty: string;
   week_number: number;
-  test_cases: { input: string; expected_output: string }[];
-  starter_code: { python?: string; java?: string; c?: string };
-}
-
-interface TestResult {
-  passed: boolean;
-  input: string;
-  expected: string;
-  actual: string;
-  error?: string;
+  leetcode_url?: string;
 }
 
 interface HistoryEntry {
@@ -49,7 +36,7 @@ interface AttemptInfo {
   ai_score?: number;
 }
 
-type PageMode = "loading" | "no-problems" | "menu" | "coding";
+type PageMode = "loading" | "no-problems" | "menu" | "solving";
 
 export default function L2TestPage() {
   const [userId, setUserId] = useState<number | null>(null);
@@ -63,34 +50,28 @@ export default function L2TestPage() {
   const [totalScore, setTotalScore] = useState(0);
   const [mode, setMode] = useState<PageMode>("loading");
 
-  const [code, setCode] = useState("");
-  const [language, setLanguage] = useState<"python" | "java" | "c">("python");
-  const [customInput, setCustomInput] = useState("");
-  const [runOutput, setRunOutput] = useState("");
-  const [testResults, setTestResults] = useState<TestResult[]>([]);
-  const [isRunning, setIsRunning] = useState(false);
+  // Solving state
+  const [pastedCode, setPastedCode] = useState("");
+  const [language, setLanguage] = useState<"python" | "java" | "c" | "cpp">("python");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activePanel, setActivePanel] = useState<"description" | "testcases" | "output">(
-    "description"
-  );
   const [submissionResult, setSubmissionResult] = useState<{
     score: number;
-    aiScore?: number;
-    aiFeedback?: string;
-    allPassed: boolean;
+    feedback: string;
   } | null>(null);
 
   // Timer
   const [timeLeft, setTimeLeft] = useState(TIMER_SECONDS);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const autoSubmitRef = useRef(false);
   const hasSubmittedRef = useRef(false);
 
-  // Violations
-  const [violations, setViolations] = useState(0);
-  const [showViolationWarning, setShowViolationWarning] = useState(false);
-  const [violationMessage, setViolationMessage] = useState("");
-  const MAX_VIOLATIONS = 3;
+  // Tab tracking (informational — we allow tab switches for LeetCode)
+  const [tabSwitches, setTabSwitches] = useState(0);
+
+  // Confirmation dialog before starting
+  const [confirmDialog, setConfirmDialog] = useState<{ problem: Problem; week: number } | null>(null);
+
+  // Track started problems: problemId -> { startTime, week, code, language }
+  const startedProblemsRef = useRef<Record<number, { startTime: number; week: number; code: string; language: string }>>({}); 
 
   useEffect(() => {
     const storedUserId = localStorage.getItem("userId");
@@ -138,7 +119,7 @@ export default function L2TestPage() {
 
   // Timer countdown
   useEffect(() => {
-    if (mode !== "coding") {
+    if (mode !== "solving") {
       if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
@@ -146,10 +127,8 @@ export default function L2TestPage() {
     timerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          // Time's up - auto submit
           if (!hasSubmittedRef.current) {
             hasSubmittedRef.current = true;
-            autoSubmitRef.current = true;
             handleAutoSubmit();
           }
           return 0;
@@ -163,204 +142,144 @@ export default function L2TestPage() {
     };
   }, [mode]);
 
+  // Track tab switches (informational, not punitive — they need to use LeetCode)
+  useEffect(() => {
+    if (mode !== "solving") return;
+    const handleVisibility = () => {
+      if (document.hidden) {
+        setTabSwitches((prev) => prev + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [mode]);
+
   const handleAutoSubmit = async () => {
     if (!userId || !selectedProblem) return;
     setIsSubmitting(true);
-    setActivePanel("output");
-    setRunOutput("⏰ Time expired! Auto-submitting your code...");
 
     const result = await submitL2Solution(
       userId,
       selectedProblem.id,
       selectedProblemWeek,
-      code,
+      pastedCode,
       language,
       true
     );
 
     if (result.success) {
-      setTestResults(result.results || []);
-      setRunOutput(result.message || "");
       setSubmissionResult({
         score: result.score || 0,
-        aiScore: result.aiScore,
-        aiFeedback: result.aiFeedback,
-        allPassed: result.allPassed || false,
+        feedback: result.aiFeedback || "",
       });
       setAttemptedMap((prev) => ({
         ...prev,
         [selectedProblem.id]: {
-          status: result.allPassed ? "passed" : "failed",
+          status: (result.score || 0) >= 18 ? "passed" : "failed",
           score: result.score || 0,
-          ai_score: result.aiScore,
         },
       }));
-    } else {
-      setRunOutput(`Error: ${result.message}`);
+      delete startedProblemsRef.current[selectedProblem.id];
+      if (timerRef.current) clearInterval(timerRef.current);
     }
     setIsSubmitting(false);
   };
 
-  const enterFullscreen = useCallback(async () => {
-    try {
-      const el = document.documentElement;
-      if (el.requestFullscreen) await el.requestFullscreen();
-      else if ((el as any).webkitRequestFullscreen) await (el as any).webkitRequestFullscreen();
-    } catch {}
-  }, []);
-
-  const exitFullscreen = useCallback(() => {
-    try {
-      if (document.fullscreenElement) document.exitFullscreen();
-    } catch {}
-  }, []);
-
-  const triggerAutoSubmit = useCallback(async () => {
-    if (autoSubmitRef.current) return;
-    autoSubmitRef.current = true;
-    exitFullscreen();
-    setMode("menu");
-    setSelectedProblem(null);
-  }, [exitFullscreen]);
-
-  useEffect(() => {
-    if (mode !== "coding") return;
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        setViolations((prev) => {
-          const n = prev + 1;
-          if (n >= MAX_VIOLATIONS) {
-            setViolationMessage(
-              `Violation ${n}/${MAX_VIOLATIONS}: Maximum violations! Auto-submitting.`
-            );
-            setShowViolationWarning(true);
-            setTimeout(() => {
-              if (!hasSubmittedRef.current) {
-                hasSubmittedRef.current = true;
-                handleAutoSubmit();
-              }
-              setTimeout(() => triggerAutoSubmit(), 3000);
-            }, 2000);
-          } else {
-            setViolationMessage(
-              `Violation ${n}/${MAX_VIOLATIONS}: Tab switch detected! ${MAX_VIOLATIONS - n} remaining.`
-            );
-            setShowViolationWarning(true);
-          }
-          return n;
-        });
-      }
-    };
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && mode === "coding" && !autoSubmitRef.current) {
-        setViolations((prev) => {
-          const n = prev + 1;
-          if (n >= MAX_VIOLATIONS) {
-            setViolationMessage(
-              `Violation ${n}/${MAX_VIOLATIONS}: Maximum violations! Auto-submitting.`
-            );
-            setShowViolationWarning(true);
-            setTimeout(() => {
-              if (!hasSubmittedRef.current) {
-                hasSubmittedRef.current = true;
-                handleAutoSubmit();
-              }
-              setTimeout(() => triggerAutoSubmit(), 3000);
-            }, 2000);
-          } else {
-            setViolationMessage(
-              `Violation ${n}/${MAX_VIOLATIONS}: Fullscreen exited! ${MAX_VIOLATIONS - n} remaining.`
-            );
-            setShowViolationWarning(true);
-            setTimeout(() => enterFullscreen(), 1500);
-          }
-          return n;
-        });
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-    };
-  }, [mode, triggerAutoSubmit, enterFullscreen]);
-  }, [mode, triggerAutoSubmit, enterFullscreen]);
-
   const openProblem = (problem: Problem, weekNum: number) => {
-    // Check if already attempted
     if (attemptedMap[problem.id]) return;
 
-    setSelectedProblem(problem);
-    setSelectedProblemWeek(weekNum);
-    setCode(problem.starter_code?.[language] || "");
-    setRunOutput("");
-    setTestResults([]);
+    const started = startedProblemsRef.current[problem.id];
+    if (started) {
+      // Already started — calculate remaining time, skip dialog
+      const elapsed = Math.floor((Date.now() - started.startTime) / 1000);
+      const remaining = Math.max(0, TIMER_SECONDS - elapsed);
+
+      if (remaining <= 0) {
+        // Time already expired while they were away — auto-submit
+        setSelectedProblem(problem);
+        setSelectedProblemWeek(started.week);
+        setPastedCode(started.code);
+        setLanguage(started.language as any);
+        hasSubmittedRef.current = false;
+        setTimeLeft(0);
+        setSubmissionResult(null);
+        setMode("solving");
+        // Trigger auto submit immediately
+        setTimeout(() => {
+          if (!hasSubmittedRef.current) {
+            hasSubmittedRef.current = true;
+            handleAutoSubmit();
+          }
+        }, 100);
+        return;
+      }
+
+      setSelectedProblem(problem);
+      setSelectedProblemWeek(started.week);
+      setPastedCode(started.code);
+      setLanguage(started.language as any);
+      setTimeLeft(remaining);
+      setSubmissionResult(null);
+      hasSubmittedRef.current = false;
+      setMode("solving");
+      return;
+    }
+
+    // First time — show confirmation dialog
+    setConfirmDialog({ problem, week: weekNum });
+  };
+
+  const confirmAndStart = () => {
+    if (!confirmDialog) return;
+    const pid = confirmDialog.problem.id;
+    // Record start time
+    startedProblemsRef.current[pid] = {
+      startTime: Date.now(),
+      week: confirmDialog.week,
+      code: "",
+      language,
+    };
+    setSelectedProblem(confirmDialog.problem);
+    setSelectedProblemWeek(confirmDialog.week);
+    setPastedCode("");
     setSubmissionResult(null);
-    setActivePanel("description");
-    setViolations(0);
-    setShowViolationWarning(false);
-    autoSubmitRef.current = false;
+    setTabSwitches(0);
     hasSubmittedRef.current = false;
     setTimeLeft(TIMER_SECONDS);
-    enterFullscreen();
-    setMode("coding");
-  };
-
-  const handleLanguageChange = (lang: "python" | "java" | "c") => {
-    setLanguage(lang);
-    if (selectedProblem) setCode(selectedProblem.starter_code?.[lang] || "");
-    setRunOutput("");
-    setTestResults([]);
-  };
-
-  const handleRun = async () => {
-    setIsRunning(true);
-    setActivePanel("output");
-    setRunOutput("Running...");
-    const result = await quickRunCode(code, language, customInput);
-    setRunOutput(result.success ? result.output || "(no output)" : `Error: ${result.error}\n${result.output || ""}`);
-    setIsRunning(false);
+    setConfirmDialog(null);
+    setMode("solving");
   };
 
   const handleSubmit = async () => {
     if (!userId || !selectedProblem || hasSubmittedRef.current) return;
+    if (!pastedCode.trim()) return;
     hasSubmittedRef.current = true;
     setIsSubmitting(true);
-    setActivePanel("output");
-    setRunOutput("Submitting & running test cases... (AI scoring if tests fail)");
 
     const result = await submitL2Solution(
       userId,
       selectedProblem.id,
       selectedProblemWeek,
-      code,
+      pastedCode,
       language,
       false
     );
 
     if (result.success) {
-      setTestResults(result.results || []);
-      setRunOutput(result.message || "");
       setSubmissionResult({
         score: result.score || 0,
-        aiScore: result.aiScore,
-        aiFeedback: result.aiFeedback,
-        allPassed: result.allPassed || false,
+        feedback: result.aiFeedback || "",
       });
       setAttemptedMap((prev) => ({
         ...prev,
         [selectedProblem.id]: {
-          status: result.allPassed ? "passed" : "failed",
+          status: (result.score || 0) >= 18 ? "passed" : "failed",
           score: result.score || 0,
-          ai_score: result.aiScore,
         },
       }));
-      // Stop timer
+      delete startedProblemsRef.current[selectedProblem.id];
       if (timerRef.current) clearInterval(timerRef.current);
     } else {
-      setRunOutput(`Error: ${result.message}`);
-      // Allow re-submit if it was a transient error (not "already attempted")
       if (!result.message?.includes("already attempted")) {
         hasSubmittedRef.current = false;
       }
@@ -369,12 +288,15 @@ export default function L2TestPage() {
   };
 
   const goBackToMenu = () => {
-    exitFullscreen();
+    // Save current code progress before leaving
+    if (selectedProblem && startedProblemsRef.current[selectedProblem.id]) {
+      startedProblemsRef.current[selectedProblem.id].code = pastedCode;
+      startedProblemsRef.current[selectedProblem.id].language = language;
+    }
     setSelectedProblem(null);
-    setTestResults([]);
-    setRunOutput("");
     setSubmissionResult(null);
     if (timerRef.current) clearInterval(timerRef.current);
+    if (userId) loadData(userId);
     setMode("menu");
   };
 
@@ -383,8 +305,6 @@ export default function L2TestPage() {
     const s = seconds % 60;
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
-
-  const monacoLangMap: Record<string, string> = { python: "python", java: "java", c: "c" };
 
   if (mode === "loading") {
     return (
@@ -429,6 +349,38 @@ export default function L2TestPage() {
 
     return (
       <div className="min-h-screen bg-gray-900">
+        {/* Confirmation Dialog */}
+        {confirmDialog && (
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+            <div className="bg-gray-800 rounded-2xl border-2 border-orange-500 p-8 max-w-md w-full text-center">
+              <p className="text-5xl mb-4">⚠️</p>
+              <h2 className="text-xl font-bold text-orange-400 mb-3">Start Problem?</h2>
+              <h3 className="text-lg font-semibold text-white mb-4">{confirmDialog.problem.title}</h3>
+              <div className="bg-gray-900 rounded-xl p-4 mb-5 text-left space-y-2">
+                <p className="text-red-400 text-sm font-semibold">⏱ 10-minute timer starts immediately</p>
+                <p className="text-red-400 text-sm font-semibold">🚫 Only ONE attempt — no retries</p>
+                <p className="text-yellow-300 text-sm">📤 After 10 minutes, whatever code you have pasted will be auto-submitted</p>
+                <p className="text-gray-400 text-sm">💡 You can switch tabs freely to solve on LeetCode</p>
+              </div>
+              <p className="text-gray-500 text-xs mb-5">Make sure you are ready before starting.</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setConfirmDialog(null)}
+                  className="flex-1 px-4 py-3 bg-gray-700 text-gray-300 font-bold rounded-lg hover:bg-gray-600 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmAndStart}
+                  className="flex-1 px-4 py-3 bg-orange-600 text-white font-bold rounded-lg hover:bg-orange-700 transition"
+                >
+                  Start (10 min) →
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <header className="bg-gray-800 border-b border-gray-700 p-4">
           <div className="max-w-5xl mx-auto flex justify-between items-center">
             <div>
@@ -447,8 +399,7 @@ export default function L2TestPage() {
         <div className="max-w-5xl mx-auto px-4 py-6">
           <div className="bg-amber-900/30 border border-amber-700 rounded-lg p-4 mb-6">
             <p className="text-amber-300 text-sm">
-              <strong>⚠️ Rules:</strong> 10-minute timer per problem. One attempt only — no retries.
-              Fullscreen enforced. 3 violations = auto-submit. Score: Pass all tests = 20 marks, Fail = AI scores 0-15.
+              <strong>How it works:</strong> Click a problem → Read the description → Open LeetCode in a new tab → Solve it there → Come back and paste your solution code → AI evaluates and scores 0-20 marks. 10-minute timer. One attempt only.
             </p>
           </div>
 
@@ -475,18 +426,15 @@ export default function L2TestPage() {
                 <h2 className="text-lg font-bold text-white">Week {currentWeek} Problems</h2>
               </div>
               <div className="space-y-3">
-                {currentWeekProblems.map((problem, idx) => {
-                  const attempt = attemptedMap[problem.id];
-                  return (
-                    <ProblemCard
-                      key={problem.id}
-                      problem={problem}
-                      index={idx}
-                      attempt={attempt}
-                      onClick={() => openProblem(problem, currentWeek)}
-                    />
-                  );
-                })}
+                {currentWeekProblems.map((problem, idx) => (
+                  <ProblemCard
+                    key={problem.id}
+                    problem={problem}
+                    index={idx}
+                    attempt={attemptedMap[problem.id]}
+                    onClick={() => openProblem(problem, currentWeek)}
+                  />
+                ))}
               </div>
             </div>
           )}
@@ -501,18 +449,15 @@ export default function L2TestPage() {
                 </div>
               </div>
               <div className="space-y-3">
-                {pw.problems.map((problem, idx) => {
-                  const attempt = attemptedMap[problem.id];
-                  return (
-                    <ProblemCard
-                      key={problem.id}
-                      problem={problem}
-                      index={idx}
-                      attempt={attempt}
-                      onClick={() => openProblem(problem, pw.week)}
-                    />
-                  );
-                })}
+                {pw.problems.map((problem, idx) => (
+                  <ProblemCard
+                    key={problem.id}
+                    problem={problem}
+                    index={idx}
+                    attempt={attemptedMap[problem.id]}
+                    onClick={() => openProblem(problem, pw.week)}
+                  />
+                ))}
               </div>
             </div>
           ))}
@@ -547,62 +492,31 @@ export default function L2TestPage() {
     );
   }
 
-  if (mode === "coding" && selectedProblem) {
+  if (mode === "solving" && selectedProblem) {
     const timerColor = timeLeft <= 60 ? "text-red-400" : timeLeft <= 180 ? "text-yellow-400" : "text-green-400";
+    const leetcodeUrl = selectedProblem.leetcode_url;
 
     return (
-      <div className="h-screen bg-gray-900 flex flex-col overflow-hidden relative">
-        {showViolationWarning && (
-          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-            <div className="bg-gray-800 rounded-xl border border-red-500 p-8 max-w-md w-full text-center">
-              <p className="text-5xl mb-4">⚠️</p>
-              <h2 className="text-2xl font-bold text-red-400 mb-4">Warning!</h2>
-              <p className="text-gray-300 mb-6">{violationMessage}</p>
-              <div className="flex justify-center gap-1 mb-6">
-                {Array.from({ length: MAX_VIOLATIONS }, (_, i) => (
-                  <div
-                    key={i}
-                    className={`w-4 h-4 rounded-full ${i < violations ? "bg-red-500" : "bg-gray-600"}`}
-                  />
-                ))}
-              </div>
-              {violations < MAX_VIOLATIONS ? (
-                <button
-                  onClick={() => setShowViolationWarning(false)}
-                  className="px-8 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition"
-                >
-                  Continue Coding
-                </button>
-              ) : (
-                <p className="text-red-400 font-bold animate-pulse">
-                  Auto-submitting & returning to problem list...
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-
+      <div className="min-h-screen bg-gray-900 flex flex-col">
         {/* Submission Result Modal */}
         {submissionResult && (
-          <div className="fixed inset-0 bg-black/80 z-40 flex items-center justify-center p-4">
-            <div className={`bg-gray-800 rounded-xl border ${submissionResult.allPassed ? "border-green-500" : "border-yellow-500"} p-8 max-w-md w-full text-center`}>
-              <p className="text-5xl mb-4">{submissionResult.allPassed ? "🎉" : "📝"}</p>
-              <h2 className={`text-2xl font-bold mb-3 ${submissionResult.allPassed ? "text-green-400" : "text-yellow-400"}`}>
-                {submissionResult.allPassed ? "All Tests Passed!" : "Submission Scored"}
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+            <div className={`bg-gray-800 rounded-2xl border-2 ${submissionResult.score >= 18 ? "border-green-500" : submissionResult.score >= 10 ? "border-yellow-500" : "border-red-500"} p-8 max-w-md w-full text-center`}>
+              <p className="text-5xl mb-4">
+                {submissionResult.score >= 18 ? "🎉" : submissionResult.score >= 10 ? "📝" : "😔"}
+              </p>
+              <h2 className={`text-2xl font-bold mb-3 ${submissionResult.score >= 18 ? "text-green-400" : submissionResult.score >= 10 ? "text-yellow-400" : "text-red-400"}`}>
+                {submissionResult.score >= 18 ? "Excellent!" : submissionResult.score >= 10 ? "Good Attempt" : "Keep Practicing"}
               </h2>
               <div className="bg-gray-900 rounded-xl p-6 mb-4">
-                <p className={`text-5xl font-black ${submissionResult.allPassed ? "text-green-400" : "text-yellow-400"}`}>
+                <p className={`text-5xl font-black ${submissionResult.score >= 18 ? "text-green-400" : submissionResult.score >= 10 ? "text-yellow-400" : "text-red-400"}`}>
                   {submissionResult.score}/20
                 </p>
-                <p className="text-gray-500 text-sm mt-2">
-                  {submissionResult.allPassed
-                    ? "Full marks — all test cases passed"
-                    : `AI Score: ${submissionResult.aiScore ?? 0}/15`}
-                </p>
+                <p className="text-gray-500 text-sm mt-2">AI Evaluation Score</p>
               </div>
-              {submissionResult.aiFeedback && (
-                <p className="text-gray-400 text-sm mb-4 italic">
-                  &quot;{submissionResult.aiFeedback}&quot;
+              {submissionResult.feedback && (
+                <p className="text-gray-400 text-sm mb-6 italic bg-gray-900/50 p-3 rounded-lg">
+                  &quot;{submissionResult.feedback}&quot;
                 </p>
               )}
               <button
@@ -615,7 +529,8 @@ export default function L2TestPage() {
           </div>
         )}
 
-        <div className="bg-gray-800 border-b border-gray-700 px-4 py-2 flex items-center justify-between flex-shrink-0">
+        {/* Header */}
+        <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-4">
             <button
               onClick={goBackToMenu}
@@ -636,213 +551,113 @@ export default function L2TestPage() {
             </span>
           </div>
           <div className="flex items-center gap-3">
-            {/* Timer */}
             <div className={`flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-900 border ${timeLeft <= 60 ? "border-red-500 animate-pulse" : "border-gray-600"}`}>
               <span className="text-xs text-gray-400">⏱</span>
               <span className={`font-mono font-bold text-sm ${timerColor}`}>
                 {formatTime(timeLeft)}
               </span>
             </div>
-            <select
-              value={language}
-              onChange={(e) => handleLanguageChange(e.target.value as "python" | "java" | "c")}
-              className="bg-gray-700 text-white text-sm rounded px-3 py-1.5 border border-gray-600"
-            >
-              <option value="python">Python</option>
-              <option value="java">Java</option>
-              <option value="c">C</option>
-            </select>
-            <div className="flex items-center gap-1">
-              {Array.from({ length: MAX_VIOLATIONS }, (_, i) => (
-                <div
-                  key={i}
-                  className={`w-3 h-3 rounded-full ${i < violations ? "bg-red-500" : "bg-green-500"}`}
-                />
-              ))}
-            </div>
-            <button
-              onClick={handleRun}
-              disabled={isRunning || isSubmitting || hasSubmittedRef.current}
-              className="px-4 py-1.5 bg-gray-700 text-white text-sm rounded hover:bg-gray-600 disabled:opacity-50 transition border border-gray-600"
-            >
-              {isRunning ? "Running..." : "▶ Run"}
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={isRunning || isSubmitting || hasSubmittedRef.current}
-              className="px-4 py-1.5 bg-green-600 text-white text-sm font-bold rounded hover:bg-green-700 disabled:opacity-50 transition"
-            >
-              {isSubmitting ? "Judging..." : hasSubmittedRef.current ? "Submitted" : "Submit"}
-            </button>
+            <span className="text-xs text-gray-500">Tab switches: {tabSwitches}</span>
           </div>
         </div>
 
+        {/* Main content - split view */}
         <div className="flex flex-1 overflow-hidden">
-          <div className="w-[45%] border-r border-gray-700 flex flex-col">
-            <div className="flex border-b border-gray-700 bg-gray-800">
-              {(["description", "testcases", "output"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActivePanel(tab)}
-                  className={`px-4 py-2 text-sm font-medium transition ${activePanel === tab ? "text-white border-b-2 border-green-500" : "text-gray-400 hover:text-gray-200"}`}
+          {/* Left: Problem description */}
+          <div className="w-1/2 border-r border-gray-700 overflow-y-auto p-6">
+            <div className="max-w-lg">
+              <h2 className="text-xl font-bold text-white mb-4">{selectedProblem.title}</h2>
+              <pre className="whitespace-pre-wrap text-gray-300 text-sm font-sans leading-relaxed bg-gray-800 p-4 rounded-lg border border-gray-700 mb-6">
+                {selectedProblem.description}
+              </pre>
+
+              {/* Open LeetCode button */}
+              {leetcodeUrl && (
+                <a
+                  href={leetcodeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition text-lg mb-4"
                 >
-                  {tab === "description" && "📄 Problem"}
-                  {tab === "testcases" && `🧪 Tests (${selectedProblem.test_cases.length})`}
-                  {tab === "output" && "📤 Output"}
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {activePanel === "description" && (
-                <div>
-                  <h2 className="text-xl font-bold text-white mb-4">{selectedProblem.title}</h2>
-                  <pre className="whitespace-pre-wrap text-gray-300 text-sm font-sans leading-relaxed bg-gray-800 p-4 rounded-lg border border-gray-700">
-                    {selectedProblem.description}
-                  </pre>
-                  <h3 className="text-lg font-semibold text-white mt-6 mb-3">Examples</h3>
-                  {selectedProblem.test_cases.slice(0, 2).map((tc, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-gray-800 rounded-lg border border-gray-700 p-4 mb-3"
-                    >
-                      <div className="mb-2">
-                        <span className="text-xs font-semibold text-gray-500">Input:</span>
-                        <pre className="text-green-300 text-sm mt-1 bg-gray-900 p-2 rounded">
-                          {tc.input}
-                        </pre>
-                      </div>
-                      <div>
-                        <span className="text-xs font-semibold text-gray-500">Output:</span>
-                        <pre className="text-green-300 text-sm mt-1 bg-gray-900 p-2 rounded">
-                          {tc.expected_output}
-                        </pre>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                  Solve on LeetCode →
+                </a>
               )}
-              {activePanel === "testcases" && (
-                <div className="space-y-3">
-                  <h3 className="text-lg font-bold text-white mb-2">Test Cases</h3>
-                  {selectedProblem.test_cases.map((tc, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-gray-800 rounded-lg border border-gray-700 p-4"
-                    >
-                      <p className="text-xs font-bold text-gray-500 mb-2">
-                        Test Case {idx + 1}
-                      </p>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <span className="text-xs text-gray-500">Input:</span>
-                          <pre className="text-gray-300 text-sm mt-1 bg-gray-900 p-2 rounded">
-                            {tc.input}
-                          </pre>
-                        </div>
-                        <div>
-                          <span className="text-xs text-gray-500">Expected:</span>
-                          <pre className="text-green-300 text-sm mt-1 bg-gray-900 p-2 rounded">
-                            {tc.expected_output}
-                          </pre>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="mt-4">
-                    <label className="text-sm font-semibold text-gray-400 block mb-2">
-                      Custom Input (for Run):
-                    </label>
-                    <textarea
-                      value={customInput}
-                      onChange={(e) => setCustomInput(e.target.value)}
-                      className="w-full h-24 bg-gray-800 text-gray-200 border border-gray-700 rounded-lg p-3 font-mono text-sm resize-none"
-                      placeholder="Enter custom input here..."
-                    />
-                  </div>
-                </div>
-              )}
-              {activePanel === "output" && (
-                <div>
-                  {runOutput && (
-                    <div className="mb-4">
-                      <h3 className="text-sm font-bold text-gray-400 mb-2">Output</h3>
-                      <pre className="bg-gray-800 border border-gray-700 rounded-lg p-4 text-sm text-gray-200 whitespace-pre-wrap font-mono">
-                        {runOutput}
-                      </pre>
-                    </div>
-                  )}
-                  {testResults.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-bold text-gray-400 mb-3">Test Results</h3>
-                      <div className="space-y-2">
-                        {testResults.map((r, idx) => (
-                          <div
-                            key={idx}
-                            className={`rounded-lg border p-3 ${r.passed ? "bg-green-900/20 border-green-700" : "bg-red-900/20 border-red-700"}`}
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-bold text-white">
-                                {r.passed ? "✅" : "❌"} Test {idx + 1}
-                              </span>
-                              <span
-                                className={`text-xs font-bold px-2 py-0.5 rounded ${r.passed ? "bg-green-800 text-green-300" : "bg-red-800 text-red-300"}`}
-                              >
-                                {r.passed ? "PASSED" : r.error || "WRONG ANSWER"}
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-3 gap-2 text-xs">
-                              <div>
-                                <span className="text-gray-500 block">Input:</span>
-                                <pre className="text-gray-300 mt-0.5 bg-gray-900 p-1.5 rounded truncate">
-                                  {r.input}
-                                </pre>
-                              </div>
-                              <div>
-                                <span className="text-gray-500 block">Expected:</span>
-                                <pre className="text-green-300 mt-0.5 bg-gray-900 p-1.5 rounded truncate">
-                                  {r.expected}
-                                </pre>
-                              </div>
-                              <div>
-                                <span className="text-gray-500 block">Got:</span>
-                                <pre
-                                  className={`mt-0.5 bg-gray-900 p-1.5 rounded truncate ${r.passed ? "text-green-300" : "text-red-300"}`}
-                                >
-                                  {r.actual}
-                                </pre>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {!runOutput && testResults.length === 0 && (
-                    <p className="text-gray-500 text-center py-8">
-                      Run your code or submit to see output here.
-                    </p>
-                  )}
-                </div>
-              )}
+
+              <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+                <p className="text-blue-300 text-xs">
+                  <strong>Steps:</strong> 1) Read the problem above → 2) Click &quot;Solve on LeetCode&quot; to open in new tab → 3) Write &amp; test your solution there → 4) Copy your code → 5) Paste it on the right → 6) Select language and submit
+                </p>
+              </div>
             </div>
           </div>
-          <div className="flex-1 flex flex-col bg-gray-900">
-            <MonacoEditor
-              height="100%"
-              language={monacoLangMap[language]}
-              value={code}
-              onChange={(value) => setCode(value || "")}
-              theme="vs-dark"
-              options={{
-                fontSize: 14,
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                tabSize: 4,
-                wordWrap: "on",
-                padding: { top: 12 },
-              }}
-            />
+
+          {/* Right: Code paste area */}
+          <div className="w-1/2 flex flex-col bg-gray-900">
+            {/* Language selector + submit */}
+            <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-gray-400 text-sm font-medium">Language:</span>
+                <select
+                  value={language}
+                  onChange={(e) => {
+                    const lang = e.target.value as "python" | "java" | "c" | "cpp";
+                    setLanguage(lang);
+                    if (selectedProblem && startedProblemsRef.current[selectedProblem.id]) {
+                      startedProblemsRef.current[selectedProblem.id].language = lang;
+                    }
+                  }}
+                  className="bg-gray-700 text-white text-sm rounded-lg px-3 py-1.5 border border-gray-600"
+                >
+                  <option value="python">Python</option>
+                  <option value="java">Java</option>
+                  <option value="c">C</option>
+                  <option value="cpp">C++</option>
+                </select>
+              </div>
+              <button
+                onClick={handleSubmit}
+                disabled={isSubmitting || hasSubmittedRef.current || !pastedCode.trim()}
+                className="px-6 py-2 bg-green-600 text-white text-sm font-bold rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {isSubmitting ? (
+                  <span className="flex items-center gap-2">
+                    <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span>
+                    AI Evaluating...
+                  </span>
+                ) : hasSubmittedRef.current ? (
+                  "Submitted ✓"
+                ) : (
+                  "Submit for Review"
+                )}
+              </button>
+            </div>
+
+            {/* Code textarea */}
+            <div className="flex-1 p-4">
+              <textarea
+                value={pastedCode}
+                onChange={(e) => {
+                  setPastedCode(e.target.value);
+                  if (selectedProblem && startedProblemsRef.current[selectedProblem.id]) {
+                    startedProblemsRef.current[selectedProblem.id].code = e.target.value;
+                  }
+                }}
+                disabled={hasSubmittedRef.current}
+                placeholder={`Paste your ${language} solution code here...\n\nSolve the problem on LeetCode first, then copy-paste your working solution.`}
+                className="w-full h-full bg-gray-800 text-gray-200 border border-gray-700 rounded-xl p-4 font-mono text-sm resize-none focus:outline-none focus:border-green-600 focus:ring-1 focus:ring-green-600 disabled:opacity-50 placeholder-gray-600"
+                spellCheck={false}
+              />
+            </div>
+
+            {/* Info footer */}
+            <div className="bg-gray-800 border-t border-gray-700 px-4 py-2 flex items-center justify-between">
+              <span className="text-gray-500 text-xs">
+                {pastedCode.trim() ? `${pastedCode.split("\n").length} lines` : "No code pasted yet"}
+              </span>
+              <span className="text-gray-500 text-xs">
+                AI evaluates correctness, approach &amp; code quality
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -852,7 +667,7 @@ export default function L2TestPage() {
   return null;
 }
 
-// Problem card sub-component
+// Problem Card
 function ProblemCard({
   problem,
   index,

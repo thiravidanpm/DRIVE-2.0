@@ -566,7 +566,7 @@ export default function SuperAdminPage() {
                   <div className="p-6 space-y-5">
                     {/* Invite Input */}
                     <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">GitHub Username or Email</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">GitHub Username</label>
                       <div className="flex gap-2">
                         <div className="flex-1 relative">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
@@ -575,7 +575,7 @@ export default function SuperAdminPage() {
                             value={devInput}
                             onChange={(e) => setDevInput(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && handleInviteCollaborator()}
-                            placeholder="username or email@example.com"
+                            placeholder="github-username"
                             className="w-full pl-8 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-gray-900 focus:border-gray-900 outline-none text-sm"
                           />
                         </div>
@@ -632,12 +632,6 @@ export default function SuperAdminPage() {
                       )}
                     </div>
 
-                    {/* Setup note */}
-                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
-                      <p className="text-xs text-gray-500">
-                        <span className="font-semibold">Setup:</span> Add <code className="bg-gray-200 px-1 rounded">GITHUB_TOKEN</code>, <code className="bg-gray-200 px-1 rounded">GITHUB_REPO_OWNER</code>, and <code className="bg-gray-200 px-1 rounded">GITHUB_REPO_NAME</code> to your .env.local file. The token needs <code className="bg-gray-200 px-1 rounded">repo</code> scope.
-                      </p>
-                    </div>
                   </div>
                 </div>
               </div>

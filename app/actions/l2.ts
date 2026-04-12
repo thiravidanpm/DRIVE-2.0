@@ -1,11 +1,9 @@
 "use server";
 
 import { supabase } from "@/lib/supabase";
-import { runCodeAgainstTests, type TestCase } from "@/lib/pistonService";
-import { scoreCodeWithAI } from "@/lib/groqCodeScorer";
+import { evaluateCodeSolution } from "@/lib/groqCodeScorer";
 
-const MARKS_PER_PROBLEM = 20; // Full marks when all test cases pass
-const MAX_AI_SCORE = 15; // Max marks AI can give when test cases fail
+const MARKS_PER_PROBLEM = 20;
 
 // ==================== L2 WEEK MANAGEMENT ====================
 
@@ -254,10 +252,7 @@ export async function submitL2Solution(
 ): Promise<{
   success: boolean;
   message: string;
-  results?: any;
-  allPassed?: boolean;
   score?: number;
-  aiScore?: number;
   aiFeedback?: string;
 }> {
   try {
@@ -270,7 +265,7 @@ export async function submitL2Solution(
     // Get problem details
     const { data: problem, error: pErr } = await supabase
       .from("l2_problems")
-      .select("title, description, test_cases")
+      .select("title, description")
       .eq("id", problemId)
       .single();
 
@@ -278,62 +273,16 @@ export async function submitL2Solution(
       return { success: false, message: "Problem not found" };
     }
 
-    const testCases: TestCase[] = problem.test_cases || [];
-    if (testCases.length === 0) {
-      return { success: false, message: "No test cases available for this problem" };
-    }
+    // AI evaluates the code solution (0-20 marks)
+    const aiResult = await evaluateCodeSolution(
+      problem.title,
+      problem.description,
+      code,
+      language
+    );
 
-    // Execute code against test cases FIRST
-    const execResult = await runCodeAgainstTests(code, language, testCases);
-
-    let finalScore = 0;
-    let aiScore: number | undefined;
-    let aiFeedback: string | undefined;
-    let status: string;
-
-    if (!execResult.success) {
-      // Execution failed completely - use AI to score
-      status = "error";
-      if (code.trim()) {
-        const aiResult = await scoreCodeWithAI(
-          problem.title,
-          problem.description,
-          code,
-          language,
-          testCases.map((tc) => ({
-            input: tc.input,
-            expected: tc.expected_output,
-            actual: "Execution Error",
-            passed: false,
-          }))
-        );
-        aiScore = aiResult.score;
-        aiFeedback = aiResult.feedback;
-        finalScore = aiScore;
-      }
-    } else if (execResult.allPassed) {
-      // All test cases passed → 20 marks
-      status = "passed";
-      finalScore = MARKS_PER_PROBLEM;
-    } else {
-      // Some/all test cases failed → AI scores 0-15
-      status = "failed";
-      const aiResult = await scoreCodeWithAI(
-        problem.title,
-        problem.description,
-        code,
-        language,
-        execResult.results.map((r) => ({
-          input: r.input,
-          expected: r.expected,
-          actual: r.actual,
-          passed: r.passed,
-        }))
-      );
-      aiScore = aiResult.score;
-      aiFeedback = aiResult.feedback;
-      finalScore = aiScore;
-    }
+    const finalScore = aiResult.score;
+    const status = finalScore >= 18 ? "passed" : "failed";
 
     // Save submission (one-time, unique constraint enforced)
     const { error: insertErr } = await supabase.from("l2_submissions").insert([{
@@ -344,15 +293,14 @@ export async function submitL2Solution(
       code,
       status,
       score: finalScore,
-      ai_score: aiScore || null,
-      ai_feedback: aiFeedback || null,
-      test_results: execResult.success ? execResult.results : [],
+      ai_score: finalScore,
+      ai_feedback: aiResult.feedback,
+      test_results: [],
       time_expired: timeExpired,
       submitted_at: new Date().toISOString(),
     }]);
 
     if (insertErr) {
-      // Unique constraint violation = already attempted
       if (insertErr.code === "23505") {
         return { success: false, message: "You have already attempted this problem." };
       }
@@ -362,18 +310,11 @@ export async function submitL2Solution(
     // Update weekly results
     await updateL2WeeklyResults(userId, weekNumber);
 
-    const scoreMsg = execResult.allPassed
-      ? `All ${execResult.totalTests} test cases passed! Score: ${finalScore}/${MARKS_PER_PROBLEM}`
-      : `${execResult.success ? execResult.totalPassed : 0}/${execResult.success ? execResult.totalTests : testCases.length} test cases passed. AI Score: ${aiScore ?? 0}/${MAX_AI_SCORE}`;
-
     return {
       success: true,
-      message: scoreMsg,
-      results: execResult.success ? execResult.results : [],
-      allPassed: execResult.allPassed || false,
+      message: `AI Score: ${finalScore}/${MARKS_PER_PROBLEM}`,
       score: finalScore,
-      aiScore,
-      aiFeedback,
+      aiFeedback: aiResult.feedback,
     };
   } catch (error: any) {
     return { success: false, message: error.message || "Submission failed" };

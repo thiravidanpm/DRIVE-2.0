@@ -10,7 +10,7 @@ interface InviteResult {
   invitee?: string;
 }
 
-export async function inviteCollaborator(usernameOrEmail: string): Promise<InviteResult> {
+export async function inviteCollaborator(username: string): Promise<InviteResult> {
   try {
     if (!GITHUB_TOKEN || !GITHUB_REPO_OWNER || !GITHUB_REPO_NAME) {
       return {
@@ -19,41 +19,9 @@ export async function inviteCollaborator(usernameOrEmail: string): Promise<Invit
       };
     }
 
-    const input = usernameOrEmail.trim();
+    const input = username.trim();
     if (!input) {
-      return { success: false, message: "Please enter a GitHub username or email" };
-    }
-
-    // GitHub API: Add collaborator by username
-    // If input is an email, we first need to find the username
-    let username = input;
-
-    if (input.includes("@")) {
-      // Search for user by email
-      const searchRes = await fetch(
-        `https://api.github.com/search/users?q=${encodeURIComponent(input)}+in:email`,
-        {
-          headers: {
-            Authorization: `Bearer ${GITHUB_TOKEN}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          },
-        }
-      );
-
-      if (!searchRes.ok) {
-        return { success: false, message: "Failed to search GitHub users" };
-      }
-
-      const searchData = await searchRes.json();
-      if (!searchData.items || searchData.items.length === 0) {
-        return {
-          success: false,
-          message: `No GitHub user found with email "${input}". Try their GitHub username instead.`,
-        };
-      }
-
-      username = searchData.items[0].login;
+      return { success: false, message: "Please enter a GitHub username" };
     }
 
     // Invite as collaborator
@@ -73,19 +41,19 @@ export async function inviteCollaborator(usernameOrEmail: string): Promise<Invit
     if (res.status === 201) {
       return {
         success: true,
-        message: `Invitation sent to @${username}! They'll receive an email to accept.`,
-        invitee: username,
+        message: `Invitation sent to @${input}! They'll receive an email to accept.`,
+        invitee: input,
       };
     } else if (res.status === 204) {
       return {
         success: true,
-        message: `@${username} is already a collaborator on this repo.`,
-        invitee: username,
+        message: `@${input} is already a collaborator on this repo.`,
+        invitee: input,
       };
     } else if (res.status === 404) {
       return {
         success: false,
-        message: `GitHub user "${username}" not found. Check the username and try again.`,
+        message: `GitHub user "${input}" not found. Check the username and try again.`,
       };
     } else if (res.status === 403) {
       return {
