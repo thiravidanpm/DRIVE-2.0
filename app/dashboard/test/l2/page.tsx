@@ -185,7 +185,7 @@ export default function L2TestPage() {
     setIsSubmitting(false);
   };
 
-  const openProblem = (problem: Problem, weekNum: number) => {
+  const openProblem = async (problem: Problem, weekNum: number) => {
     if (attemptedMap[problem.id]) return;
 
     const started = startedProblemsRef.current[problem.id];
@@ -195,22 +195,42 @@ export default function L2TestPage() {
       const remaining = Math.max(0, TIMER_SECONDS - elapsed);
 
       if (remaining <= 0) {
-        // Time already expired while they were away — auto-submit
+        // Time already expired while they were away — auto-submit directly
+        hasSubmittedRef.current = true;
         setSelectedProblem(problem);
         setSelectedProblemWeek(started.week);
         setPastedCode(started.code);
         setLanguage(started.language as any);
-        hasSubmittedRef.current = false;
         setTimeLeft(0);
         setSubmissionResult(null);
+        setIsSubmitting(true);
         setMode("solving");
-        // Trigger auto submit immediately
-        setTimeout(() => {
-          if (!hasSubmittedRef.current) {
-            hasSubmittedRef.current = true;
-            handleAutoSubmit();
-          }
-        }, 100);
+
+        // Submit directly using ref values (state not yet rendered)
+        const result = await submitL2Solution(
+          userId!,
+          problem.id,
+          started.week,
+          started.code,
+          started.language,
+          true
+        );
+
+        if (result.success) {
+          setSubmissionResult({
+            score: result.score || 0,
+            feedback: result.aiFeedback || "",
+          });
+          setAttemptedMap((prev) => ({
+            ...prev,
+            [problem.id]: {
+              status: (result.score || 0) >= 18 ? "passed" : "failed",
+              score: result.score || 0,
+            },
+          }));
+          delete startedProblemsRef.current[problem.id];
+        }
+        setIsSubmitting(false);
         return;
       }
 
